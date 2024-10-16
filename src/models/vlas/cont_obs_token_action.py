@@ -15,7 +15,7 @@ class ContObsTokenActionVLA(BaseVLA):
         super().__init__(llm_backbone)
         self.observation_autoencoder = VectorObservationAutoencoder(obs_dim, hidden_dim, mlp_layers)
         self.action_embed = nn.Embedding(num_actions, hidden_dim)
-        self.action_pred = MLP(hidden_dim, hidden_dim, num_actions, mlp_layers, output_activation=nn.Softmax(dim=-1))
+        self.action_pred = MLP(hidden_dim, hidden_dim, num_actions, mlp_layers, output_activation=None)
         self.loss_weight = loss_weight
 
         # define special tokens
@@ -60,7 +60,7 @@ class ContObsTokenActionVLA(BaseVLA):
 
         loss_dict = self.compute_loss(all_embed, predictions, observations, actions, valid_mask)
 
-        return outputs, loss_dict
+        return outputs, predictions, loss_dict
 
     def _obtain_predictions(self, input_embed: torch.Tensor, output_embed: torch.Tensor) -> torch.Tensor:
         predictions = {}

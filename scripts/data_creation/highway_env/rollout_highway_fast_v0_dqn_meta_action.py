@@ -8,12 +8,16 @@ from multiprocessing import Pool, cpu_count
 
 def single_rollout(args):
     env_id, model_path, rollout_length, rollout_id, save_dir = args
+
+    save_path = os.path.join(save_dir, f'rollout_{rollout_id}.npz')
+    if os.path.exists(save_path):
+        return
     
     # Create environment
     env = gymnasium.make(env_id, render_mode='rgb_array')
     
     # Load the trained model
-    model = DQN.load(model_path)
+    model = DQN.load(model_path, device='cpu')
     
     observations = []
     actions = []
@@ -28,7 +32,7 @@ def single_rollout(args):
             break
     
     # Save the rollout data
-    np.savez(os.path.join(save_dir, f'rollout_{rollout_id}.npz'),
+    np.savez(save_path,
              observations=np.array(observations),
              actions=np.array(actions))
     
@@ -42,8 +46,11 @@ def parallel_rollouts(env_id, model_path, num_rollouts, rollout_length, save_dir
     args_list = [(env_id, model_path, rollout_length, i, save_dir) 
                  for i in range(num_rollouts)]
     
+    import random
+    random.shuffle(args_list)
+
     # Use 10 CPU cores
-    num_processes = 32
+    num_processes = 64
     
     # Run rollouts in parallel
     with Pool(num_processes) as p:
@@ -52,8 +59,8 @@ def parallel_rollouts(env_id, model_path, num_rollouts, rollout_length, save_dir
 if __name__ == "__main__":
     env_id = "highway-fast-v0"
     model_path = "/u/shuhan/projects/vla/data/highway_env/highway_fast_v0_dqn_meta_action/model"
-    num_rollouts = 160000  # Adjust as needed
+    num_rollouts = 2000000  # Adjust as needed
     rollout_length = 100  # Adjust as needed
-    save_dir = "/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action/rollouts"
+    save_dir = "/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action/rollouts_train"
     
     parallel_rollouts(env_id, model_path, num_rollouts, rollout_length, save_dir)

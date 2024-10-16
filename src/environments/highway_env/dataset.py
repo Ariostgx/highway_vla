@@ -5,11 +5,11 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
 class HighwayDataset(Dataset):
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, overfit: bool = False):
         self.data_dir = data_dir
+        self.overfit = overfit
         self.files = self._obtain_all_files()
 
-    
     def __len__(self):
         return len(self.files)
     
@@ -21,7 +21,15 @@ class HighwayDataset(Dataset):
         return observations, actions
     
     def _obtain_all_files(self):
-        return [os.path.join(self.data_dir, f) for f in os.listdir(self.data_dir) if f.endswith('.npz')]
+        files = [os.path.join(self.data_dir, f) for f in os.listdir(self.data_dir) if f.endswith('.npz')]
+
+        overfit_num = 1
+        
+        # only use the first overfit_num files if overfit is True
+        if self.overfit:
+            files = files[:overfit_num] * (len(files) // overfit_num + 1) # repeat the first 32 files to match the length
+        
+        return files
 
 # define the collate function
 def collate_fn(batch):

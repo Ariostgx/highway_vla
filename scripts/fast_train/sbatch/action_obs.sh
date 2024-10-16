@@ -14,4 +14,4 @@
 
 conda activate vla_hw
 cd /u/shuhan/projects/vla/scripts/fast_train
-python train_cont_obs_token_action_vla.py --exp_name action_obs --num_epochs 10 --batch_size 128 --action_weight 1.0 --obs_weight 1.0 --reconst_weight 1.0
+python train_cont_obs_token_action_vla.py --exp_name action_obs --num_epochs 50 --batch_size 128 --action_weight 1.0 --obs_weight 1.0 --reconst_weight 1.0
