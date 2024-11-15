@@ -32,7 +32,8 @@ class LitAutoEncoder(L.LightningModule):
        _, predictions, loss_dict = self.vla(obs, act, valid_mask)
        loss = loss_dict['total']
 
-       action_acc = (predictions['action'].argmax(dim=-1) == batch[1]).float().mean()
+       action_acc = ((predictions['action'].argmax(dim=-1) == batch[1])[batch[2]]).float().mean()
+
        self.log('action_acc', action_acc, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
        for k, v in loss_dict.items():
           self.log(k + '_loss', v, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)

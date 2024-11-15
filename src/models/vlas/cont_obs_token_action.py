@@ -26,7 +26,7 @@ class ContObsTokenActionVLA(BaseVLA):
         self.to_predict_obs = loss_weight["obs"] > 0
         self.to_reconstruct_obs = loss_weight["reconst"] > 0
 
-    def forward(self, observations: torch.Tensor, actions: torch.Tensor, valid_mask: torch.Tensor) -> Tuple[BaseModelOutputWithPast, torch.Tensor]:
+    def forward(self, observations: torch.Tensor, actions: torch.Tensor, valid_mask: torch.Tensor, inference: bool = False) -> Tuple[BaseModelOutputWithPast, torch.Tensor]:
         B, T = observations.shape[:2]
         
         # flatten the observations and actions
@@ -56,31 +56,34 @@ class ContObsTokenActionVLA(BaseVLA):
         # Obs_token_0 [EOO] Act_token_0 [BOO] Obs_token_1 [EOO] Act_token_1 ... [EOO] Action_token_T-1
         output_embed = outputs.hidden_states[-1] # B, 4T-1, hidden_dim
 
-        predictions = self._obtain_predictions(input_embed, output_embed)
+        predictions = self._obtain_predictions(input_embed, output_embed, inference)
 
-        loss_dict = self.compute_loss(all_embed, predictions, observations, actions, valid_mask)
+        loss_dict = self.compute_loss(all_embed, predictions, observations, actions, valid_mask, inference)
 
         return outputs, predictions, loss_dict
 
-    def _obtain_predictions(self, input_embed: torch.Tensor, output_embed: torch.Tensor) -> torch.Tensor:
+    def _obtain_predictions(self, input_embed: torch.Tensor, output_embed: torch.Tensor, inference: bool = False) -> torch.Tensor:
         predictions = {}
         # input_embed
-        # [BOO] Obs_token_0 [EOO] Act_token_0 [BOO] Obs_token_1 [EOO] Act_token_1 ... [EOO]
+        # [BOO] Obs_token_0 [EOO] Act_token_0 [BOO] Obs_token_1 [EOO] Act_token_1 ... Obs_token_T-1 [EOO]
         # output_embed
         # Obs_token_0 [EOO] Act_token_0 [BOO] Obs_token_1 [EOO] Act_token_1 ... [EOO] Action_token_T-1
 
         if self.to_predict_action:
             predictions["action"] = self.action_pred(output_embed[:, 2::4]) # B, T, num_actions
 
-        if self.to_predict_obs:
+        if self.to_predict_obs and not inference:
             predictions["obs"] = self.observation_autoencoder.decode(output_embed[:, ::4]) # B, T, obs_dim
         
-        if self.to_reconstruct_obs:
+        if self.to_reconstruct_obs and not inference:
             predictions["reconst"] = self.observation_autoencoder.decode(input_embed[:, 1::4]) # B, T, obs_dim
 
         return predictions
 
-    def compute_loss(self, all_embed: torch.Tensor, predictions: dict[str, torch.Tensor], observations: torch.Tensor, actions: torch.Tensor, valid_mask: torch.Tensor) -> dict[str, torch.Tensor]:
+    def compute_loss(self, all_embed: torch.Tensor, predictions: dict[str, torch.Tensor], observations: torch.Tensor, actions: torch.Tensor, valid_mask: torch.Tensor, inference: bool = False) -> dict[str, torch.Tensor]:
+        if inference:
+            return {}
+
         total_loss = 0
         loss_dict = {}
 
@@ -128,5 +131,28 @@ class ContObsTokenActionVLA(BaseVLA):
 
         return x, mask
 
-    def predict_action(self, observations: torch.Tensor, past_actions: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
-        pass
+    def predict_action(self, observations: torch.Tensor, past_actions: torch.Tensor) -> torch.Tensor:
+        '''
+        predict the next action given the past actions and the current observation during inference/rollout.
+
+        args:
+            observations: T, ...
+            past_actions: T-1
+        returns:
+            predictions: 1, num_actions
+        '''
+
+        with torch.no_grad():
+            T = observations.shape[0]
+            
+            obs_input = observations[None, ...] # 1, T, ...
+
+            # pad an empty action token at the end to align with the input format
+            act_input = past_actions[None, ...] # 1, T-1
+            act_input = torch.cat([act_input, torch.zeros(1, 1, device=act_input.device)], dim=1) # 1, T
+
+            valid_mask = torch.ones(1, T, device=past_actions.device, dtype=torch.bool) # 1, T
+
+            _, predictions, _ = self.forward(obs_input, act_input, valid_mask, inference=True)
+
+            return F.softmax(predictions['action'][0, -1], dim=-1)
