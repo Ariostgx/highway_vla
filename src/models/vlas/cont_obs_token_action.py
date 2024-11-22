@@ -17,6 +17,7 @@ class ContObsTokenActionVLA(BaseVLA):
         self.action_embed = nn.Embedding(num_actions, hidden_dim)
         self.action_pred = MLP(hidden_dim, hidden_dim, num_actions, mlp_layers, output_activation=None)
         self.loss_weight = loss_weight
+        self.num_actions = num_actions
 
         # define special tokens
         self.boo_token_embed = nn.Parameter(torch.randn(1, 1, hidden_dim) * 0.01) # [BOO]

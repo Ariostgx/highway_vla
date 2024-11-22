@@ -30,7 +30,7 @@ class LaneChangeTaskSpec(HighwayEnvTaskSpec):
     abs_y[:, 1:] += abs_y[:, :1]
     abs_y += lane_width / 2
 
-    lane_ids = (abs_y / lane_width).astype(np.int32)
+    lane_ids = (abs_y / lane_width).astype(int)
 
     return lane_ids[:, 0]
 
@@ -79,11 +79,12 @@ class LaneChangeTaskSpec(HighwayEnvTaskSpec):
     for idx, hop_idx in enumerate(self.hop_indices[:-1]):
       current_lane_id = self.hop_lane_ids[idx]
       next_lane_id = self.hop_lane_ids[idx+1]
-      path = " -> ".join([f"Lane {lane_id}" for lane_id in self.hop_lane_ids[hop_idx+1:-1]])
+      next_path_lanes = [f"Lane {lane_id}" for lane_id in self.hop_lane_ids[idx+1:]]
+      path = " -> ".join(next_path_lanes)
       action = 'turn right' if next_lane_id > current_lane_id else 'turn left'
 
-      if len(path) > 0:
-        path = f"Follow {path} and reach Lane {self.hop_lane_ids[-1]}"
+      if len(next_path_lanes) > 1:
+        path = f"Follow {path}"
       else:
         path = f"Goal Reachable"
 
