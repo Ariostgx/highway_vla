@@ -5,10 +5,11 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
 class HighwayDataset(Dataset):
-    def __init__(self, data_dir: str, overfit: bool = False):
+    def __init__(self, data_dir: str, overfit: bool = False, max_obs_len: int = 50):
         self.data_dir = data_dir
         self.overfit = overfit
         self.files = self._obtain_all_files()
+        self.max_obs_len = max_obs_len
 
     def __len__(self):
         return len(self.files)
@@ -16,8 +17,8 @@ class HighwayDataset(Dataset):
     def __getitem__(self, idx):
         file_path = self.files[idx]
         data = np.load(file_path)
-        observations = torch.tensor(data['observations'], dtype=torch.float32)
-        actions = torch.tensor(data['actions'], dtype=torch.float32)
+        observations = torch.tensor(data['observations'], dtype=torch.float32)[:self.max_obs_len]
+        actions = torch.tensor(data['actions'], dtype=torch.float32)[:self.max_obs_len]
         return observations, actions
     
     def _obtain_all_files(self):

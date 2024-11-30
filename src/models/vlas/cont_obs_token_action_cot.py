@@ -69,7 +69,6 @@ class ContObsTokenActionCOTVLA(ContObsTokenActionVLA):
             task_spec = self.task_spec_func(observations[bidx].cpu().numpy(), actions[bidx].cpu().numpy(), self.cot_cfg)
             
             goal_spec = task_spec.get_goal_spec()
-            ending_spec = task_spec.get_ending_spec()
             cot_prompt = task_spec.get_multi_step_cot_prompt()
             hop_indices = task_spec.get_task_hop_info()['hop_indices']
 
