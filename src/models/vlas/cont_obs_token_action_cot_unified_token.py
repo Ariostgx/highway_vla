@@ -255,7 +255,9 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
         
         use_cot = (cot_infernce_mode == 'always') or (cot_infernce_mode == 'start' and curr_obs_idx == 0)
 
-        if cot_infernce_mode == 'pred' or not use_cot:
+        if cot_infernce_mode == 'never':
+            curr_input_str = curr_obs_str + "<BOA>"
+        elif cot_infernce_mode == 'pred' or not use_cot:
             curr_input_str = curr_obs_str
         else:
             curr_input_str = curr_obs_str + "<BOT>"
