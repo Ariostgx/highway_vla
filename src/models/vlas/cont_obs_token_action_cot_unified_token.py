@@ -44,8 +44,7 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
 
         self.to_reconstruct_obs = loss_weight["reconst"] > 0
 
-    def obtain_input_strs(self, observations: torch.Tensor, actions: torch.Tensor, valid_mask: torch.Tensor):
-    # -> Tuple[torch.Tensor, torch.Tensor, dict]:
+    def obtain_input_strs(self, batch_data: Tuple[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, dict]:
         '''
         Obtain the input strings for the LLM.
         Afterwards, needs to:
@@ -53,11 +52,12 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
             2. Mask labels for non-training tokens: <BOO>, <EOO>, GoalText tokens
         Output:
             batch_input_strs: list[str], the input strings for the LLM
-            batch_goal_spec_index: list[int], the index of the goal specification in the input strings
+            batch_index_data: dict, the index of the goal specification in the input strings
         '''
+        observations, actions, valid_mask = batch_data[:3]
         B = observations.shape[0]
         batch_input_strs = []
-        batch_goal_spec_index = [] # use to mask the labels for goal-specification text tokens
+        batch_goal_spec_index = []
 
         for bidx in range(B):
             # the input string for the LLM. need to replace the observation placeholder tokens with actual observation strings after encoding
@@ -98,10 +98,13 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
             input_str += f"<BOO><Obs_{last_hop_idx + 1}><EOO><EndOfRollout>"
             batch_input_strs.append(input_str)
 
-        return batch_input_strs, batch_goal_spec_index
+        batch_index_data = {'goal_spec_index': batch_goal_spec_index}
 
-    def replace_obs_placeholder_tokens(self, batch_input_ids: torch.Tensor, batch_input_embeds: torch.Tensor, obs_embed: torch.Tensor):
+        return batch_input_strs, batch_index_data
+
+    def replace_obs_placeholder_tokens(self, batch_input_ids: torch.Tensor, batch_input_embeds: torch.Tensor, obs_embed: torch.Tensor, batch_index_data: dict):
         B, T = batch_input_ids.shape[:2]
+
         batch_obs_mask = torch.zeros(B, T, device=batch_input_ids.device, dtype=torch.bool)
 
         for bidx in range(B):
@@ -112,12 +115,14 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
                     batch_input_embeds[bidx][obs_token_mask] = obs_embed[bidx, obs_idx]
                     batch_obs_mask[bidx][obs_token_mask] = True
         
-        return batch_input_embeds, batch_obs_mask
+        batch_obs_data = {'obs_mask': batch_obs_mask}
+        
+        return batch_input_embeds, batch_obs_data
     
-    def obtain_ignore_mask(self, batch_input_ids: torch.Tensor, batch_attention_mask: torch.Tensor, batch_obs_mask: torch.Tensor, batch_goal_spec_index: list[int]):
+    def obtain_ignore_mask(self, batch_input_ids: torch.Tensor, batch_attention_mask: torch.Tensor, batch_obs_mask: torch.Tensor, batch_index_data: dict):
         # ignore goal specification text tokens during training
         goal_spec_token_mask = torch.zeros_like(batch_attention_mask, dtype=torch.bool)
-        for bidx, goal_spec_idx in enumerate(batch_goal_spec_index):
+        for bidx, goal_spec_idx in enumerate(batch_index_data['goal_spec_index']):
             goal_spec_token_mask[bidx, :goal_spec_idx] = True
 
         # ignore the <BOO> and <EOO> tokens during training
@@ -163,7 +168,9 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
         return task_masks
 
 
-    def forward(self, observations: torch.Tensor, actions: torch.Tensor, valid_mask: torch.Tensor, inference: bool = False) -> Tuple[BaseModelOutputWithPast, torch.Tensor]:
+    def forward(self, batch_data: Tuple[torch.Tensor]) -> Tuple[BaseModelOutputWithPast, torch.Tensor]:
+        observations, actions, valid_mask = batch_data[:3]
+
         B, T = observations.shape[:2]
         
         # flatten the observations and actions
@@ -175,7 +182,7 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
         act_flatten[~valid_mask] = 0
 
         # process the input strings
-        batch_input_strs, batch_goal_spec_index = self.obtain_input_strs(observations, actions, valid_mask)
+        batch_input_strs, batch_index_data = self.obtain_input_strs(batch_data)
 
         # obtain batch_input_ids and batch_attention_mask
         tokenized = self.llm_tokenizer(batch_input_strs, return_tensors="pt", padding=True, truncation=True).to(observations.device)
@@ -188,9 +195,9 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
 
         # autoencode the observations
         obs_embed = self.observation_autoencoder.encode(obs_flatten) # B, T, hidden_dim
-        batch_input_embeds, batch_obs_mask = self.replace_obs_placeholder_tokens(batch_input_ids, batch_input_embeds, obs_embed)
+        batch_input_embeds, batch_obs_data = self.replace_obs_placeholder_tokens(batch_input_ids, batch_input_embeds, obs_embed, batch_index_data)
         
-        batch_label_ignore_mask = self.obtain_ignore_mask(batch_input_ids, batch_attention_mask, batch_obs_mask, batch_goal_spec_index)
+        batch_label_ignore_mask = self.obtain_ignore_mask(batch_input_ids, batch_attention_mask, batch_obs_data['obs_mask'], batch_index_data)
         batch_label_ids = batch_input_ids.clone()
         batch_label_ids[batch_label_ignore_mask] = -100
 
@@ -202,12 +209,12 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
 
         llm_output = self.llm_backbone(inputs_embeds=batch_input_embeds, attention_mask=batch_attention_mask, output_hidden_states=True)
 
-        loss_dict = self.compute_loss(llm_output, batch_label_ids, task_masks, obs_flatten, obs_embed, valid_mask)
+        loss_dict = self.compute_loss(llm_output, batch_label_ids, task_masks, obs_flatten, obs_embed, valid_mask, batch_obs_data)
         
         # return loss_dict, batch_input_embeds
         return loss_dict, batch_input_embeds, batch_label_ids, batch_input_ids, llm_output
 
-    def compute_loss(self, llm_output: BaseModelOutputWithPast, batch_label_ids: torch.Tensor, task_masks: dict[str, torch.Tensor], obs_flatten: torch.Tensor, obs_embed: torch.Tensor, valid_mask: torch.Tensor) -> dict[str, torch.Tensor]:
+    def compute_loss(self, llm_output: BaseModelOutputWithPast, batch_label_ids: torch.Tensor, task_masks: dict[str, torch.Tensor], obs_flatten: torch.Tensor, obs_embed: torch.Tensor, valid_mask: torch.Tensor, batch_obs_data: dict) -> dict[str, torch.Tensor]:
         total_loss = 0
         loss_dict = {}
 

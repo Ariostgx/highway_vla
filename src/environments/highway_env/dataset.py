@@ -23,12 +23,13 @@ class HighwayDataset(Dataset):
     
     def _obtain_all_files(self):
         files = [os.path.join(self.data_dir, f) for f in os.listdir(self.data_dir) if f.endswith('.npz')]
+        files = sorted(files)
 
         overfit_num = 1
         
         # only use the first overfit_num files if overfit is True
         if self.overfit:
-            files = files[:overfit_num] * (len(files) // overfit_num + 1) # repeat the first 32 files to match the length
+            files = files[:overfit_num] * 1600 # repeat the first 32 files to match the length
         
         return files
 

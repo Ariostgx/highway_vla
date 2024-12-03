@@ -151,8 +151,8 @@ class LaneChangeTaskSpecCollision(LaneChangeTaskSpec):
         if cot_cidx == -1:
           cot_cidx = np.random.choice(coll_cidxs, 1, replace=False)
 
-      select_tidx.append(tidx)
+      select_tidx.append(tidx.item())
       select_cot_observations.append(self.collision_observations[cot_cidx])
-      select_cot_collision_actions.append(self.collision_actions[cot_cidx].astype(np.int32))
+      select_cot_collision_actions.append(self.collision_actions[cot_cidx])
 
     return select_tidx, select_cot_observations, select_cot_collision_actions
