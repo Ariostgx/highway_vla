@@ -61,6 +61,7 @@ ckpt_dicts = {
    'with_wm_cr_0.2_re_0.5_sr_0.2': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.2_re_0.5_sr_0.2/lightning_logs/version_2/checkpoints/test_model.ckpt',
    "with_wm_cr_0.8_re_0.8_sr_0.2": "~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2/lightning_logs/version_1/checkpoints/test_model.ckpt",
    'no_wm_cr_0.8_re_0.8_sr_0.2': '~/results/vla/quick_run_cot_unified_collision/no_wm_cr_0.8_re_0.8_sr_0.2/lightning_logs/version_2/checkpoints/test_model.ckpt',
+   "with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act": "~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act/lightning_logs/version_0/checkpoints/test_model.ckpt",
 }
 
 ckpt = ckpt_dicts[model_name]

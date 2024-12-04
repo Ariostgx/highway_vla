@@ -17,9 +17,10 @@ from ..backbones.observation import VectorObservationAutoencoder
 from ...auto_labeling.highway_env.lane_change import LaneChangeTaskSpecCollision
 
 class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnifiedToken):
-    def __init__(self, llm_backbone: PreTrainedModel, llm_tokenizer: PreTrainedTokenizer, task_spec_func: LaneChangeTaskSpecCollision, obs_dim: int, num_actions: int, hidden_dim: int, mlp_layers: int, loss_weight: dict[str, float] = {"action": 1.0, 'reconst': 1.0, "cot": 1.0, "separator": 1.0, "rollout_stop": 1.0, 'wm': 1.0}, cot_mode: str = "none", cot_cfg: dict = {}, max_obs_len: int = 50, use_wm: bool = False):
+    def __init__(self, llm_backbone: PreTrainedModel, llm_tokenizer: PreTrainedTokenizer, task_spec_func: LaneChangeTaskSpecCollision, obs_dim: int, num_actions: int, hidden_dim: int, mlp_layers: int, loss_weight: dict[str, float] = {"action": 1.0, 'reconst': 1.0, "cot": 1.0, "separator": 1.0, "rollout_stop": 1.0, 'wm': 1.0}, cot_mode: str = "none", cot_cfg: dict = {}, max_obs_len: int = 50, use_wm: bool = False, mask_collision_action: bool = False):
         super().__init__(llm_backbone, llm_tokenizer, task_spec_func, obs_dim, num_actions, hidden_dim, mlp_layers, loss_weight, cot_mode, cot_cfg, max_obs_len)
         self.use_wm = use_wm
+        self.mask_collision_action = mask_collision_action
 
         assert 'safe_reflect_rate' in cot_cfg, "safe_reflect_rate must be specified in cot_cfg"
         assert 'collide_reflect_rate' in cot_cfg, "collide_reflect_rate must be specified in cot_cfg"
@@ -70,11 +71,13 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
         batch_input_strs = []
         batch_goal_spec_index = [] # use to mask the labels for goal-specification text tokens
         batch_cot_wm_observations = []
+        batch_collision_action_index = [] # use to mask the labels for collision action tokens
 
         for bidx in range(B):
             # the input string for the LLM. need to replace the observation placeholder tokens with actual observation strings after encoding
             input_str = "" 
             cot_wm_observations = []
+            collision_action_index = []
 
             valid_mask_b = valid_mask[bidx]
             cot_valid_mask_b = cot_valid_mask[bidx]
@@ -140,6 +143,9 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
                         if len(collide_obs.shape) == 3:
                             collide_obs = collide_obs.squeeze(0)
                         
+                        input_str_token_num = self.llm_tokenizer(input_str, return_tensors="pt").input_ids.shape[1]
+                        collision_action_index.append(input_str_token_num+1)
+
                         input_str += f"<BOA><Act_{collide_act_id}><EOA>"
 
                         if self.use_wm:
@@ -165,10 +171,12 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
                 batch_cot_wm_observations.append(torch.stack(cot_wm_observations))
             else:
                 batch_cot_wm_observations.append(None)
+            batch_collision_action_index.append(collision_action_index)
         
         batch_index_data = {
             'goal_spec_index': batch_goal_spec_index,
-            'wm_observations': batch_cot_wm_observations
+            'wm_observations': batch_cot_wm_observations,
+            'collision_action_index': batch_collision_action_index
         }
 
         return batch_input_strs, batch_index_data
@@ -213,6 +221,17 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
         else:
             batch_obs_data['wm_target_embeds'] = None
         return batch_input_embeds, batch_obs_data
+
+    def obtain_ignore_mask(self, batch_input_ids: torch.Tensor, batch_attention_mask: torch.Tensor, batch_obs_mask: torch.Tensor, batch_index_data: dict):
+        ignore_mask = super().obtain_ignore_mask(batch_input_ids, batch_attention_mask, batch_obs_mask, batch_index_data)
+
+        if self.mask_collision_action:
+            collision_action_index = batch_index_data['collision_action_index']
+            for bidx, atidxs in enumerate(collision_action_index):
+                for tidx in atidxs:
+                    ignore_mask[bidx, tidx] = True
+
+        return ignore_mask
 
     def obtain_task_masks(self, batch_input_ids: torch.Tensor, batch_ignore_mask: torch.Tensor):
         task_masks = super().obtain_task_masks(batch_input_ids, batch_ignore_mask)

@@ -18,7 +18,7 @@ torch.set_float32_matmul_precision('high')
 
 # define the LightningModule
 class LitAutoEncoder(L.LightningModule):
-    def __init__(self, loss_weight: dict, cot_cfg: dict, cot_mode: str, llm_model: str, use_wm: bool):
+    def __init__(self, loss_weight: dict, cot_cfg: dict, cot_mode: str, llm_model: str, use_wm: bool, mask_collision_action: bool):
       super().__init__()
       llm_backbone = AutoModelForCausalLM.from_pretrained(llm_model)
       tokenizer = AutoTokenizer.from_pretrained(llm_model)
@@ -36,7 +36,9 @@ class LitAutoEncoder(L.LightningModule):
 
       task_spec_func = LaneChangeTaskSpecCollision
 
-      self.vla = ContObsTokenActionCOTVLAUnifiedTokenCollision(llm_backbone, tokenizer, task_spec_func, obs_dim, num_actions, hidden_dim, mlp_layers, loss_weight, cot_mode, cot_cfg, max_obs_len=50, use_wm=use_wm)
+      print(f'mask_collision_action: {mask_collision_action}')
+
+      self.vla = ContObsTokenActionCOTVLAUnifiedTokenCollision(llm_backbone, tokenizer, task_spec_func, obs_dim, num_actions, hidden_dim, mlp_layers, loss_weight, cot_mode, cot_cfg, max_obs_len=50, use_wm=use_wm, mask_collision_action=mask_collision_action)
     
     def training_step(self, batch, batch_idx):
        model_return = self.vla(batch)
@@ -80,6 +82,7 @@ def main():
     parser.add_argument('--num_epochs', type=int, default=500)
     parser.add_argument('--llm_model', type=str, default='HuggingFaceTB/SmolLM2-135M-Instruct') # 'gpt2', 'HuggingFaceTB/SmolLM2-135M-Instruct'
     parser.add_argument('--overfit', action='store_true')
+    parser.add_argument('--mask_collision_action', action='store_true')
     parser.add_argument('--ckpt_path', type=str, default=None)
     args = parser.parse_args()
     
@@ -94,10 +97,10 @@ def main():
     cot_mode = 'all'
 
     
-    if args.ckpt_path is not None:
-        model = LitAutoEncoder.load_from_checkpoint(os.path.expanduser(args.ckpt_path), loss_weight=loss_weight, cot_cfg=cot_cfg, cot_mode=cot_mode, llm_model=args.llm_model, use_wm=args.use_wm)
-    else:
-        model = LitAutoEncoder(loss_weight, cot_cfg, cot_mode, args.llm_model, use_wm=args.use_wm)
+    # if args.ckpt_path is not None:
+    #     model = LitAutoEncoder.load_from_checkpoint(os.path.expanduser(args.ckpt_path), loss_weight=loss_weight, cot_cfg=cot_cfg, cot_mode=cot_mode, llm_model=args.llm_model, use_wm=args.use_wm, mask_collision_action=args.mask_collision_action)
+    # else:
+    model = LitAutoEncoder(loss_weight, cot_cfg, cot_mode, args.llm_model, use_wm=args.use_wm, mask_collision_action=args.mask_collision_action)
 
     data_folder = '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_train_collision'
 
@@ -114,7 +117,10 @@ def main():
     else:
         trainer = L.Trainer(max_epochs=args.num_epochs, default_root_dir=save_path, strategy='ddp_find_unused_parameters_true', log_every_n_steps=50)
 
-    trainer.fit(model, train_dataloaders=dataloader)
+    if args.ckpt_path is not None:
+        trainer.fit(model, train_dataloaders=dataloader, ckpt_path=os.path.expanduser(args.ckpt_path))
+    else:
+        trainer.fit(model, train_dataloaders=dataloader)
 
 if __name__ == "__main__":
     main()
