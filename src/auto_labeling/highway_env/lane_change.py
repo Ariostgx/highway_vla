@@ -106,13 +106,20 @@ class LaneChangeTaskSpecCollision(LaneChangeTaskSpec):
     super().__init__(observations, actions, cfgs)
     
     assert 'action_sample_mode' in cfgs, "action_sample_mode must be specified"
+    assert 'max_rewind_step' in cfgs, "max_rewind_step must be specified"
 
     self.collision_observations = collision_observations
     self.collision_actions = collision_actions
     self.collision_tidx  = collision_indices
+    self.max_rewind_step = cfgs['max_rewind_step']
 
     self.hop_lane_ids, self.hop_indices = self._get_task_lane_ids()
     self.cot_tidx, self.cot_observations, self.cot_collision_actions = self._get_collision_data()
+
+    if self.max_rewind_step > 1:
+      assert self.cfgs['action_sample_mode'] == 'random', "action_sample_mode must be random when max_rewind_step > 1"
+    
+    # print(f"max_rewind_step: {self.max_rewind_step}")
   
   def _get_collision_data(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     # tidx is the index of the self.observations and self.actions
@@ -129,9 +136,15 @@ class LaneChangeTaskSpecCollision(LaneChangeTaskSpec):
     for tidx in all_unique_tidx:
       coll_cidx_mask = self.collision_tidx == tidx
       coll_cidxs = np.where(coll_cidx_mask)[0]
+
+      # print(len(coll_cidxs), self.max_rewind_step)
+
+      max_select_num = min(self.max_rewind_step, len(coll_cidxs))
+      # select_num = np.random.randint(1, max_select_num+1)
+      select_num = max_select_num
       
       if action_sample_mode == 'random':
-        cot_cidx = np.random.choice(coll_cidxs, 1, replace=False)
+        select_cidx = np.random.choice(coll_cidxs, select_num, replace=False)
       
       elif action_sample_mode == 'future':
         # choose the action that is the closest to the next gt action in the future
@@ -149,10 +162,13 @@ class LaneChangeTaskSpecCollision(LaneChangeTaskSpec):
             cot_cidx = cidx
 
         if cot_cidx == -1:
-          cot_cidx = np.random.choice(coll_cidxs, 1, replace=False)
+          select_cidx = np.random.choice(coll_cidxs, select_num, replace=False)
+        else:
+          select_cidx = [cot_cidx]
 
-      select_tidx.append(tidx.item())
-      select_cot_observations.append(self.collision_observations[cot_cidx])
-      select_cot_collision_actions.append(self.collision_actions[cot_cidx])
+      for cidx in select_cidx:
+        select_tidx.append(tidx.item())
+        select_cot_observations.append(self.collision_observations[cidx])
+        select_cot_collision_actions.append(self.collision_actions[cidx])
 
     return select_tidx, select_cot_observations, select_cot_collision_actions

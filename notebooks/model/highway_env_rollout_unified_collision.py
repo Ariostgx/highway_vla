@@ -52,7 +52,8 @@ cot_cfg = {
     'action_sample_mode': 'future',
     'safe_reflect_rate': 0.3,
     'collide_reflect_rate': 0.8,
-    'collide_rewind_rate': 0.8
+    'collide_rewind_rate': 0.8,
+    'max_rewind_step': 1
 }
 
 
@@ -304,7 +305,8 @@ logging.basicConfig(
 all_scores = {'token_count': [], 'action_count': [], 'exact_match_score': [], 'subset_coverage': [], 'model_failed': [], 'rollout_collision': [], 'reached_goal': [], 'exceeded_length': [], 'collision_detect_recall': [], 'rewind_precision': [], 'rewind_collision_avoid_rate': [], 'model_rewind_ratio': []}
 
 for rollout_idx in tqdm.tqdm(range(rollout_count)):
-    scores = rollout_one_episode(model, goal_spec_dataset, use_wm, wm_mode, cot_mode)
+    with torch.no_grad():
+      scores = rollout_one_episode(model, goal_spec_dataset, use_wm, wm_mode, cot_mode)
 
     for k, v in scores.items():
       if k == 'cot_stats':

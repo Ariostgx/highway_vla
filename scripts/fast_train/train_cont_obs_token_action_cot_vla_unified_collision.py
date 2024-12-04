@@ -75,6 +75,7 @@ def main():
     parser.add_argument('--safe_reflect_rate', type=float, default=0.3)
     parser.add_argument('--collide_reflect_rate', type=float, default=0.8)
     parser.add_argument('--collide_rewind_rate', type=float, default=0.8)
+    parser.add_argument('--max_rewind_step', type=int, default=1)
 
     parser.add_argument('--use_wm', action='store_true')
     parser.add_argument('--batch_size', type=int, default=18)
@@ -93,7 +94,7 @@ def main():
 
     loss_weight = {"action": args.action_weight, "obs": 0.0, 'reconst': args.reconst_weight, "cot": args.cot_weight, "separator": args.separator_weight, "rollout_stop": args.rollout_stop_weight, "wm": args.wm_weight}
 
-    cot_cfg = {'lanes_count': 5, 'max_hop': 4, 'cot_index_mode': 'both', 'action_sample_mode': args.action_sample_mode, 'safe_reflect_rate': args.safe_reflect_rate, 'collide_reflect_rate': args.collide_reflect_rate, 'collide_rewind_rate': args.collide_rewind_rate}
+    cot_cfg = {'lanes_count': 5, 'max_hop': 4, 'cot_index_mode': 'both', 'action_sample_mode': args.action_sample_mode, 'safe_reflect_rate': args.safe_reflect_rate, 'collide_reflect_rate': args.collide_reflect_rate, 'collide_rewind_rate': args.collide_rewind_rate, 'max_rewind_step': args.max_rewind_step}
     cot_mode = 'all'
 
     

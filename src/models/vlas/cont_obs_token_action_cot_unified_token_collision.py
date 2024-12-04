@@ -29,8 +29,9 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
         # define reflection tokens
         special_reflect_tokens = ['<BACKSPACE>', '<COMMIT>']
         if self.use_wm:
+            max_rewind_step = cot_cfg['max_rewind_step']
             special_reflect_tokens +=  ['<BWM>', '<EWM>']
-            special_reflect_tokens += [f'<WM_{i}>' for i in range(max_obs_len)]
+            special_reflect_tokens += [f'<WM_{i}>' for i in range(max_obs_len * max_rewind_step)]
         
         self.llm_tokenizer.add_special_tokens({'additional_special_tokens': special_reflect_tokens})
         self.llm_backbone.resize_token_embeddings(len(self.llm_tokenizer))
@@ -123,42 +124,40 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
                 use_cot &= valid_mask[bidx, obs_idx+1] == True
                 
                 if use_cot:
-                    if safe_cot:
-                        input_str += f"<BOA><Act_{safe_act_id}><EOA>"
+                    if not is_safe_step and not safe_cot:
+                        cidxs = np.where(np.array(cot_tidx) == obs_idx)[0].tolist()
                         
-                        if self.use_wm:
-                            input_str += f"<BWM><WM_{cot_cnt}><EWM>"
-                            safe_obs = observations[bidx][valid_mask_b][obs_idx+1]
-                            cot_wm_observations.append(safe_obs)
-                            # print('safe_obs.shape', safe_obs.shape)
+                        for cidx in cidxs:
+                            collide_act_id = int(cot_collision_actions[cidx])
+
+                            # collide observation is the observation at the collision step
+                            collide_obs = torch.tensor(cot_collision_observations[cidx], device=observations.device)
+
+                            if len(collide_obs.shape) == 3:
+                                collide_obs = collide_obs.squeeze(0)
+                            
+                            input_str_token_num = self.llm_tokenizer(input_str, return_tensors="pt").input_ids.shape[1]
+                            collision_action_index.append(input_str_token_num+1)
+
+                            input_str += f"<BOA><Act_{collide_act_id}><EOA>"
+
+                            if self.use_wm:
+                                input_str += f"<BWM><WM_{cot_cnt}><EWM>"
+                                cot_wm_observations.append(collide_obs)
+                                cot_cnt += 1
+                                # print('collide_obs.shape', collide_obs.shape)
                         
-                        input_str += f"<BOT>Safe<EOT>"
-                    else:
-                        cidx = cot_tidx.index(obs_idx)
-                        collide_act_id = int(cot_collision_actions[cidx])
+                            input_str += f"<BOT>Collision<EOT>"
+                            input_str += f"<BACKSPACE>"
 
-                        # collide observation is the observation at the collision step
-                        collide_obs = torch.tensor(cot_collision_observations[cidx], device=observations.device)
+                    input_str += f"<BOA><Act_{safe_act_id}><EOA>"
 
-                        if len(collide_obs.shape) == 3:
-                            collide_obs = collide_obs.squeeze(0)
-                        
-                        input_str_token_num = self.llm_tokenizer(input_str, return_tensors="pt").input_ids.shape[1]
-                        collision_action_index.append(input_str_token_num+1)
-
-                        input_str += f"<BOA><Act_{collide_act_id}><EOA>"
-
-                        if self.use_wm:
-                            input_str += f"<BWM><WM_{cot_cnt}><EWM>"
-                            cot_wm_observations.append(collide_obs)
-                            # print('collide_obs.shape', collide_obs.shape)
-                        
-                        input_str += f"<BOT>Collision<EOT>"
-                        input_str += f"<BACKSPACE>"
-                        input_str += f"<BOA><Act_{safe_act_id}><EOA>"
-
-                    cot_cnt += 1
-                
+                    if self.use_wm:
+                        input_str += f"<BWM><WM_{cot_cnt}><EWM>"
+                        safe_obs = observations[bidx][valid_mask_b][obs_idx+1]
+                        cot_wm_observations.append(safe_obs)
+                        cot_cnt += 1
+                    input_str += f"<BOT>Safe<EOT>"
                 else:
                     # if not using CoT, add the action and directly commit
                     input_str += f"<BOA><Act_{safe_act_id}><EOA>"
