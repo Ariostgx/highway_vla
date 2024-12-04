@@ -255,3 +255,115 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
             loss_dict['total'] += wm_loss * self.loss_weight['wm']
 
         return loss_dict
+
+    def init_action_inference(self, past_input_embeds: torch.Tensor | None, past_input_str: str, curr_obs: torch.Tensor, generate_cfg: dict):
+        '''
+        Conduct the initial action inference step given the current observation, end with <EOA> or <EndOfRollout>.
+        '''
+
+        curr_obs_idx = past_input_str.count("<Obs_")
+        curr_obs_str = f"<BOO><Obs_{curr_obs_idx}><EOO>"
+        
+        curr_input_str = curr_obs_str # do not enforce <BOA> and allow <EndOfRollout>
+        curr_input_embeds = self.llm_backbone.get_input_embeddings()(self.llm_tokenizer(curr_input_str, return_tensors="pt").input_ids.to(curr_obs.device))
+        
+        curr_obs_embed = self.observation_autoencoder.encode(curr_obs.reshape(1, -1)) # 1, hidden_dim
+        curr_input_embeds[0, 1] = curr_obs_embed
+
+        input_embeds = torch.cat([past_input_embeds, curr_input_embeds], dim=1)
+
+        eoa_token_id = self.llm_tokenizer("<EOA>", return_tensors="pt").input_ids[0, 0]
+        curr_output = self.llm_backbone.generate(inputs_embeds=input_embeds, use_cache=False, past_key_values=None, return_dict_in_generate=True, eos_token_id=eoa_token_id, **generate_cfg)
+
+        new_generated_ids = curr_output.sequences[0]
+        new_generated_str = self.llm_tokenizer.decode(new_generated_ids, skip_special_tokens=False)
+        new_generated_embeds = self.llm_backbone.get_input_embeddings()(new_generated_ids)
+
+        update_str = curr_input_str + new_generated_str
+        update_embeddings = torch.cat([curr_input_embeds, new_generated_embeds[None, :]], dim=1)
+
+        return update_str, update_embeddings
+
+    def cot_start_inference(self, past_input_embeds: torch.Tensor | None, past_input_str: str, cot_mode: str, use_wm: bool):
+        '''
+        Decide to do CoT or not, different modes: 
+            Use WM:
+                    - Pred: let model predict one token, check <BWM> and <COMMIT> logit; select the one with higher logit
+                    - Always CoT: insert <BWM>
+                    - Never CoT: insert <COMMIT>
+            Not use WM:
+                    - Pred: do nothing, pass.
+                    - Always CoT: insert <BOT>
+                    - Never CoT: insert <COMMIT>
+        '''
+        if not use_wm:
+            if cot_mode == 'pred':
+                return "", None
+            elif cot_mode == 'always':
+                curr_input_str = "<BOT>"
+            elif cot_mode == 'never':
+                curr_input_str = "<COMMIT>"
+        else:
+            if cot_mode == 'pred':
+                llm_output = self.llm_backbone.forward(inputs_embeds=past_input_embeds)
+                llm_logits = llm_output.logits[0, -1, :]
+
+                bwm_token_id = self.llm_tokenizer("<BWM>", return_tensors="pt").input_ids[0, 0].item()
+                commit_token_id = self.llm_tokenizer("<COMMIT>", return_tensors="pt").input_ids[0, 0].item()
+
+                bwm_logit = llm_logits[bwm_token_id]
+                commit_logit = llm_logits[commit_token_id]
+
+                if bwm_logit > commit_logit:
+                    curr_input_str = "<BWM>"
+                else:
+                    curr_input_str = "<COMMIT>"
+            elif cot_mode == 'always':
+                curr_input_str = "<BWM>"
+            elif cot_mode == 'never':
+                curr_input_str = "<COMMIT>"
+
+        # insert the CoT token
+        curr_input_embeds = self.llm_backbone.get_input_embeddings()(self.llm_tokenizer(curr_input_str, return_tensors="pt").input_ids.to(past_input_embeds.device))
+        update_str = curr_input_str
+        update_embeddings = curr_input_embeds
+
+        return update_str, update_embeddings
+
+    def cot_append_wm_embeddings(self, past_input_embeds: torch.Tensor, past_input_str: str, wm_obs: torch.Tensor|None):
+        '''
+        Append the WM embeddings to the past input embeddings, the last token is <BWM>.
+
+        If use simulator WM, encode the WM observation.
+        If use model WM, do WM prediction with the last hidden state.
+        '''
+        
+        if wm_obs is not None:
+            wm_embed = self.observation_autoencoder.encode(wm_obs.reshape(1, -1))
+        else:
+            llm_output = self.llm_backbone.forward(inputs_embeds=past_input_embeds, output_hidden_states=True)
+            wm_pred_input = llm_output.hidden_states[-1][:, -1, :]
+            wm_embed = self.wm_head(wm_pred_input)
+
+        ewm_token_id = self.llm_tokenizer("<EWM>", return_tensors="pt").input_ids[0, 0].item()
+        ewm_token_embed = self.llm_backbone.get_input_embeddings()(torch.tensor([ewm_token_id], device=past_input_embeds.device))
+
+        wm_cnt = past_input_str.count("<WM_")
+        update_str = f"<WM_{wm_cnt}>" + "<EWM>"
+        update_embeddings = torch.cat([wm_embed[None, :], ewm_token_embed[None, :]], dim=1)
+
+        return update_str, update_embeddings
+
+    def cot_commit_inference(self, past_input_embeds: torch.Tensor, past_input_str: str, generate_cfg: dict):
+        commit_token_id = self.llm_tokenizer("<COMMIT>", return_tensors="pt").input_ids[0, 0]
+
+        curr_output = self.llm_backbone.generate(inputs_embeds=past_input_embeds, use_cache=False, past_key_values=None, return_dict_in_generate=True, eos_token_id=commit_token_id, **generate_cfg)
+
+        new_generated_ids = curr_output.sequences[0]
+        new_generated_str = self.llm_tokenizer.decode(new_generated_ids, skip_special_tokens=False)
+        new_generated_embeds = self.llm_backbone.get_input_embeddings()(new_generated_ids)
+
+        update_str = new_generated_str
+        update_embeddings = new_generated_embeds[None, :]
+
+        return update_str, update_embeddings
