@@ -372,8 +372,31 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
 
         return update_str, update_embeddings
 
-    def cot_commit_inference(self, past_input_embeds: torch.Tensor, past_input_str: str, generate_cfg: dict):
-        commit_token_id = self.llm_tokenizer("<COMMIT>", return_tensors="pt").input_ids[0, 0]
+    def cot_end_inference(self, past_input_embeds: torch.Tensor | None, past_input_str: str):
+        llm_output = self.llm_backbone.forward(inputs_embeds=past_input_embeds)
+        llm_logits = llm_output.logits[0, -1, :]
+
+        backspace_token_id = self.llm_tokenizer("<BACKSPACE>", return_tensors="pt").input_ids[0, 0].item()
+        commit_token_id = self.llm_tokenizer("<COMMIT>", return_tensors="pt").input_ids[0, 0].item()
+
+        backspace_logit = llm_logits[backspace_token_id]
+        commit_logit = llm_logits[commit_token_id]
+
+        if backspace_logit > commit_logit:
+            curr_input_str = "<BACKSPACE>"
+        else:
+            curr_input_str = "<COMMIT>"
+
+        # insert the CoT token
+        curr_input_embeds = self.llm_backbone.get_input_embeddings()(self.llm_tokenizer(curr_input_str, return_tensors="pt").input_ids.to(past_input_embeds.device))
+        update_str = curr_input_str
+        update_embeddings = curr_input_embeds
+
+        return update_str, update_embeddings
+
+
+    def cot_commit_inference(self, past_input_embeds: torch.Tensor, past_input_str: str, generate_cfg: dict, ending_token='<COMMIT>'):
+        commit_token_id = self.llm_tokenizer(ending_token, return_tensors="pt").input_ids[0, 0]
 
         curr_output = self.llm_backbone.generate(inputs_embeds=past_input_embeds, use_cache=False, past_key_values=None, return_dict_in_generate=True, eos_token_id=commit_token_id, **generate_cfg)
 
