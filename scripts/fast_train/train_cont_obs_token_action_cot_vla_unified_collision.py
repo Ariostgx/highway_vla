@@ -18,7 +18,8 @@ torch.set_float32_matmul_precision('high')
 
 # define the LightningModule
 class LitAutoEncoder(L.LightningModule):
-    def __init__(self, loss_weight: dict, cot_cfg: dict, cot_mode: str, llm_model: str, use_wm: bool, mask_collision_action: bool):
+    def __init__(self, loss_weight: dict, cot_cfg: dict, cot_mode: str, llm_model: str, use_wm: bool, mask_collision_action: bool, T_step: int):
+      self.T_step = T_step
       super().__init__()
       llm_backbone = AutoModelForCausalLM.from_pretrained(llm_model)
       tokenizer = AutoTokenizer.from_pretrained(llm_model)
@@ -27,6 +28,8 @@ class LitAutoEncoder(L.LightningModule):
          hidden_dim = 768
       elif llm_model == 'HuggingFaceTB/SmolLM2-135M-Instruct':
          hidden_dim = 576
+      elif llm_model == 'HuggingFaceTB/SmolLM2-360M-Instruct':
+         hidden_dim = 960
       else:
          raise ValueError(f'Unknown LLM model: {llm_model}')
       
@@ -50,15 +53,24 @@ class LitAutoEncoder(L.LightningModule):
         #    self.log('action_acc', action_acc, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
        for k, v in loss_dict.items():
           self.log(k + '_loss', v, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        
-    #    self.log('batch_preview_strs', batch_preview_strs, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=False)
+       
+       self.log('lr', self.optimizers().param_groups[0]['lr'], on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+       #    self.log('batch_preview_strs', batch_preview_strs, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=False)
 
        return loss
 
     def configure_optimizers(self):
+        print(f'configure optimizer with starting lr: 1e-3, T_step: {self.T_step}')
         optimizer = optim.AdamW(self.parameters(), lr=1e-3)
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=156500)
-        return [optimizer], [scheduler]
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.T_step)
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",  # or "epoch"
+                "frequency": 1
+            }
+        }
   
 
 def main():
@@ -78,13 +90,16 @@ def main():
     parser.add_argument('--max_rewind_step', type=int, default=1)
 
     parser.add_argument('--use_wm', action='store_true')
-    parser.add_argument('--batch_size', type=int, default=18)
     parser.add_argument('--exp_name', type=str, default='test')
-    parser.add_argument('--num_epochs', type=int, default=500)
     parser.add_argument('--llm_model', type=str, default='HuggingFaceTB/SmolLM2-135M-Instruct') # 'gpt2', 'HuggingFaceTB/SmolLM2-135M-Instruct'
     parser.add_argument('--overfit', action='store_true')
     parser.add_argument('--mask_collision_action', action='store_true')
     parser.add_argument('--ckpt_path', type=str, default=None)
+
+    parser.add_argument('--batch_size', type=int, default=18)
+    parser.add_argument('--num_epochs', type=int, default=30)
+    parser.add_argument('--T_step', type=int, default=711960)
+
     args = parser.parse_args()
     
     save_root = '~/results/vla/quick_run_cot_unified_collision'
@@ -97,11 +112,7 @@ def main():
     cot_cfg = {'lanes_count': 5, 'max_hop': 4, 'cot_index_mode': 'both', 'action_sample_mode': args.action_sample_mode, 'safe_reflect_rate': args.safe_reflect_rate, 'collide_reflect_rate': args.collide_reflect_rate, 'collide_rewind_rate': args.collide_rewind_rate, 'max_rewind_step': args.max_rewind_step}
     cot_mode = 'all'
 
-    
-    # if args.ckpt_path is not None:
-    #     model = LitAutoEncoder.load_from_checkpoint(os.path.expanduser(args.ckpt_path), loss_weight=loss_weight, cot_cfg=cot_cfg, cot_mode=cot_mode, llm_model=args.llm_model, use_wm=args.use_wm, mask_collision_action=args.mask_collision_action)
-    # else:
-    model = LitAutoEncoder(loss_weight, cot_cfg, cot_mode, args.llm_model, use_wm=args.use_wm, mask_collision_action=args.mask_collision_action)
+    model = LitAutoEncoder(loss_weight, cot_cfg, cot_mode, args.llm_model, use_wm=args.use_wm, mask_collision_action=args.mask_collision_action, T_step=args.T_step)
 
     data_folder = '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_train_collision'
 

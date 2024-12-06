@@ -1,29 +1,8 @@
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2 --use_wm --wm_mode model --cot_mode pred
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2 --use_wm --wm_mode model --cot_mode always
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2 --use_wm --wm_mode model --cot_mode never
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2 --use_wm --wm_mode env --cot_mode pred
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2 --use_wm --wm_mode env --cot_mode always
-
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.2_re_0.5_sr_0.2 --use_wm --wm_mode model --cot_mode pred
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.2_re_0.5_sr_0.2 --use_wm --wm_mode model --cot_mode always
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.2_re_0.5_sr_0.2 --use_wm --wm_mode model --cot_mode never
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.2_re_0.5_sr_0.2 --use_wm --wm_mode env --cot_mode pred
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.2_re_0.5_sr_0.2 --use_wm --wm_mode env --cot_mode always
-
-# python highway_env_rollout_unified_collision.py --model_name no_wm_cr_0.8_re_0.8_sr_0.2 --wm_mode model --cot_mode pred
-# python highway_env_rollout_unified_collision.py --model_name no_wm_cr_0.8_re_0.8_sr_0.2 --wm_mode model --cot_mode always
-# python highway_env_rollout_unified_collision.py --model_name no_wm_cr_0.8_re_0.8_sr_0.2 --wm_mode model --cot_mode never
-
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act --use_wm --wm_mode model --cot_mode pred
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act --use_wm --wm_mode model --cot_mode always
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act --use_wm --wm_mode model --cot_mode never
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act --use_wm --wm_mode env --cot_mode pred
-# python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act --use_wm --wm_mode env --cot_mode always
+# python highway_env_rollout_unified_collision_multistep.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_2 --wm_mode model --cot_mode pred --max_rewind_step 2
+# python highway_env_rollout_unified_collision_multistep.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_2 --wm_mode model --cot_mode always --max_rewind_step 2
 
 
-
-python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.2_sr_0.2 --use_wm --wm_mode model --cot_mode pred
-python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.2_sr_0.2 --use_wm --wm_mode model --cot_mode always
-python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.2_sr_0.2 --use_wm --wm_mode model --cot_mode never
-python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.2_sr_0.2 --use_wm --wm_mode env --cot_mode pred
-python highway_env_rollout_unified_collision.py --model_name with_wm_cr_0.8_re_0.2_sr_0.2 --use_wm --wm_mode env --cot_mode always
+python highway_env_rollout_unified_collision_multistep.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4 --wm_mode env --cot_mode pred --max_rewind_step 4
+python highway_env_rollout_unified_collision_multistep.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4 --wm_mode env --cot_mode always --max_rewind_step 4
+python highway_env_rollout_unified_collision_multistep.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_2 --wm_mode env --cot_mode pred --max_rewind_step 2
+python highway_env_rollout_unified_collision_multistep.py --model_name with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_2 --wm_mode env --cot_mode always --max_rewind_step 2

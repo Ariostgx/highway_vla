@@ -59,6 +59,9 @@ cot_cfg = {
 
 ckpt_dicts = {
    'rewind_4_overfit': '~/results/vla/quick_run_cot_unified_collision/max_rewind_step_4_overfit/lightning_logs/version_2/checkpoints/test.ckpt',
+   'with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act_max_rewind_step_4': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act_max_rewind_step_4/lightning_logs/version_3/checkpoints/test_model.ckpt',
+   'with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_2': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_2/lightning_logs/version_2/checkpoints/test_model.ckpt',
+   'with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4/lightning_logs/version_1/checkpoints/test_model.ckpt'
 }
 
 ckpt = ckpt_dicts[model_name]
@@ -222,7 +225,7 @@ def rollout_one_episode(model, goal_spec_dataset, use_wm, wm_mode, cot_mode):
       obs, reward, has_collision, truncated, info = env.step(final_act_id)
       ego_lane_id = get_ego_lane_id(obs)
       
-      print(f'step: {len(actions)}, action: {final_act_id}, ego_lane_id: {ego_lane_id}')
+      # print(f'step: {len(actions)}, action: {final_act_id}, ego_lane_id: {ego_lane_id}')
 
       actions.append(final_act_id)
       ego_lane_ids.append(ego_lane_id)
