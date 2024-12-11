@@ -1,6 +1,7 @@
 import os
 import sys
 import argparse
+import json
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torch import nn
@@ -16,6 +17,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from src.environments.highway_env.dataset import HighwayCollisionDataset, collate_fn_collision
 from src.models.vlas.cont_obs_token_action_cot_unified_token_collision import ContObsTokenActionCOTVLAUnifiedTokenCollision
 from src.auto_labeling.highway_env.lane_change import LaneChangeTaskSpecCollision
+from src.conf.highway_env.vla import get_config
 
 torch.set_float32_matmul_precision('high')
 
@@ -34,8 +36,9 @@ def main():
     total_limit=1)
     mixed_precision = 'fp16' if args.fp16 else 'no'
     accelerator = Accelerator(mixed_precision=mixed_precision, log_with='tensorboard', project_config=project_config)
-    # convert args to dict
     accelerator.init_trackers(project_name='vla_exp', config=vars(args))
+    with open(os.path.join(save_path, 'configs.json'), 'w') as f:
+        json.dump(vars(args), f)
 
     # Step 3: Setup logging
     setup_logging(save_path)
@@ -60,42 +63,7 @@ def main():
 
 # Setup configuration
 def setup_config():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--action_weight', type=float, default=1.0)
-    parser.add_argument('--reconst_weight', type=float, default=10.0)
-    parser.add_argument('--cot_weight', type=float, default=1.0)
-    parser.add_argument('--separator_weight', type=float, default=1.0)
-    parser.add_argument('--rollout_stop_weight', type=float, default=1.0)
-    parser.add_argument('--wm_weight', type=float, default=1.0)
-    
-    parser.add_argument('--action_sample_mode', type=str, default='future') # 'random', 'future'
-    parser.add_argument('--safe_reflect_rate', type=float, default=0.3)
-    parser.add_argument('--collide_reflect_rate', type=float, default=0.8)
-    parser.add_argument('--collide_rewind_rate', type=float, default=0.8)
-    parser.add_argument('--max_rewind_step', type=int, default=1)
-    parser.add_argument('--shortest_seq_rate', type=float, default=0.0)
-
-    parser.add_argument('--use_wm', action='store_true')
-    parser.add_argument('--exp_name', type=str, default='test')
-    parser.add_argument('--llm_model', type=str, default='HuggingFaceTB/SmolLM2-135M-Instruct') # 'gpt2', 'HuggingFaceTB/SmolLM2-135M-Instruct'
-    parser.add_argument('--overfit', action='store_true')
-    parser.add_argument('--mask_collision_action', action='store_true')
-    parser.add_argument('--ckpt_path', type=str, default=None)
-
-    parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--batch_size', type=int, default=18)
-    parser.add_argument('--num_epochs', type=int, default=30)
-    parser.add_argument('--T_step', type=int, default=711960)
-    parser.add_argument('--num_workers', type=int, default=4)
-    parser.add_argument('--save_steps', type=int, default=50)
-    parser.add_argument('--max_token_num', type=int, default=464)
-    parser.add_argument('--log_freq', type=int, default=50)
-
-    parser.add_argument('--single_gpu', action='store_true')
-    parser.add_argument('--fp16', action='store_true')
-    parser.add_argument('--torch_compile', action='store_true')
-
-    args = parser.parse_args()
+    args = get_config()
 
     loss_weight = {"action": args.action_weight, "obs": 0.0, 'reconst': args.reconst_weight, "cot": args.cot_weight, "separator": args.separator_weight, "rollout_stop": args.rollout_stop_weight, "wm": args.wm_weight}
 
