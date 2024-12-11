@@ -1,6 +1,7 @@
 import os
 import sys
-import argparse
+import glob
+import wandb
 import json
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -10,6 +11,7 @@ from accelerate import Accelerator
 from transformers import get_scheduler
 from tqdm import tqdm
 import logging
+from datetime import datetime
 from accelerate.utils import LoggerType, ProjectConfiguration
 
 sys.path.append('/u/shuhan/projects/vla')
@@ -31,18 +33,27 @@ def main():
     save_path = os.path.expanduser(save_path)
     os.makedirs(save_path, exist_ok=True)
 
-    # Step 2: Initialize Accelerator
+    ckpt_folders = glob.glob(os.path.join(save_path, 'checkpoints/*'))
+    if len(ckpt_folders) > 0 and not args.always_from_scratch:
+        ckpt_path = sorted(ckpt_folders)[-1]
+        print(f'Loading checkpoint from {ckpt_path}')
+    else:
+        print('No checkpoint found, starting from scratch')
+        ckpt_path = None
+    
+    # # Step 2: Initialize Accelerator
     project_config = ProjectConfiguration(project_dir=save_path, automatic_checkpoint_naming=True, 
     total_limit=1)
     mixed_precision = 'fp16' if args.fp16 else 'no'
-    accelerator = Accelerator(mixed_precision=mixed_precision, log_with='tensorboard', project_config=project_config)
+    accelerator = Accelerator(mixed_precision=mixed_precision, project_config=project_config)
     accelerator.init_trackers(project_name='vla_exp', config=vars(args))
     with open(os.path.join(save_path, 'configs.json'), 'w') as f:
         json.dump(vars(args), f)
 
     # Step 3: Setup logging
-    setup_logging(save_path)
-    logging.info("Configuration and environment setup complete.")
+    if accelerator.is_main_process:
+        time_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        wandb.init(project='vla_highwayenv', name=f'{args.exp_name}_{time_str}', config=vars(args))
 
     # Step 4: Load dataset and dataloader
     train_dataloader = setup_dataset(args)
@@ -56,10 +67,14 @@ def main():
     # Step 7: Prepare everything with Accelerator
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, train_dataloader, lr_scheduler)
 
+    if ckpt_path is not None:
+        accelerator.load_state(ckpt_path)
+
     # Step 8: Train the model
     train(model, optimizer, lr_scheduler, train_dataloader, accelerator, args)
 
     accelerator.end_training()
+    wandb.finish()
 
 # Setup configuration
 def setup_config():
@@ -105,14 +120,16 @@ def setup_model(args, loss_weight, cot_cfg):
     cot_mode = 'all'
     llm_model = args.llm_model
 
-    llm_backbone = AutoModelForCausalLM.from_pretrained(llm_model)
-    tokenizer = AutoTokenizer.from_pretrained(llm_model)
+
+    cached_path = f'/storage/Models/shuhan/llms/{llm_model}'
+    llm_backbone = AutoModelForCausalLM.from_pretrained(cached_path)
+    tokenizer = AutoTokenizer.from_pretrained(cached_path)
 
     if llm_model == 'gpt2':
         hidden_dim = 768
-    elif llm_model == 'HuggingFaceTB/SmolLM2-135M-Instruct':
+    elif llm_model == 'SmolLM2-135M-Instruct':
         hidden_dim = 576
-    elif llm_model == 'HuggingFaceTB/SmolLM2-360M-Instruct':
+    elif llm_model == 'SmolLM2-360M-Instruct':
         hidden_dim = 960
     else:
         raise ValueError(f'Unknown LLM model: {llm_model}')
@@ -158,8 +175,8 @@ def train(model, optimizer, lr_scheduler, train_dataloader, accelerator, args):
             if step % args.save_steps == 0:
                 accelerator.save_state()
             
-            if step % args.log_freq == 0:
-                accelerator.log(loss_dict, step=step)
+            if step % args.log_freq == 0 and accelerator.is_main_process:
+                wandb.log(loss_dict, step=step)
 
 # Run the script
 if __name__ == "__main__":

@@ -38,7 +38,7 @@ class BaseExperiment:
 
         'use_wm': False,
         'exp_name': 'test',
-        'llm_model': 'HuggingFaceTB/SmolLM2-135M-Instruct',  # 'gpt2', 'HuggingFaceTB/SmolLM2-135M-Instruct'
+        'llm_model': 'SmolLM2-135M-Instruct',  # 'gpt2', 'SmolLM2-135M-Instruct'
         'overfit': False,
         'mask_collision_action': False,
         'ckpt_path': None,
@@ -55,6 +55,7 @@ class BaseExperiment:
         'single_gpu': False,
         'fp16': False,
         'torch_compile': False,
+        'always_from_scratch': False,
     }
 
     def __init__(self):

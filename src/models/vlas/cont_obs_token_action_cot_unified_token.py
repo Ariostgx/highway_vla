@@ -212,7 +212,7 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
         batch_attention_mask = batch_attention_mask[:, :-1]
         batch_label_ids = batch_label_ids[:, 1:]
 
-        print(batch_input_embeds.shape)
+        # print(batch_input_embeds.shape)
 
         llm_output = self.llm_backbone(inputs_embeds=batch_input_embeds, attention_mask=batch_attention_mask, output_hidden_states=True)
 

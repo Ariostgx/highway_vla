@@ -13,10 +13,9 @@
 ### Whatever your job needs to do
 
 export REQUESTS_CA_BUNDLE="/etc/ssl/certs"
-export HTTP_PROXY="http://192.168.0.10:3128"
-export HTTPS_PROXY="https://192.168.0.10:3129"
-
-export http_proxy="http://192.168.0.10:3128"
-export https_proxy="https://192.168.0.10:3129"
+export HTTP_PROXY="http://192.168.0.10:443"
+export HTTPS_PROXY="https://192.168.0.10:443"
+export http_proxy="http://192.168.0.10:443"
+export https_proxy="https://192.168.0.10:443"
 
 sleep 360000
