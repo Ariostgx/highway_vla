@@ -53,6 +53,7 @@ cot_cfg = {
     'safe_reflect_rate': 0.3,
     'collide_reflect_rate': 0.8,
     'collide_rewind_rate': 0.8,
+    'shortest_seq_rate': 0.0,
     'max_rewind_step': args.max_rewind_step
 }
 
@@ -61,7 +62,8 @@ ckpt_dicts = {
    'rewind_4_overfit': '~/results/vla/quick_run_cot_unified_collision/max_rewind_step_4_overfit/lightning_logs/version_2/checkpoints/test.ckpt',
    'with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act_max_rewind_step_4': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act_max_rewind_step_4/lightning_logs/version_3/checkpoints/test_model.ckpt',
    'with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_2': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_2/lightning_logs/version_2/checkpoints/test_model.ckpt',
-   'with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4/lightning_logs/version_1/checkpoints/test_model.ckpt'
+   'with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4/lightning_logs/version_1/checkpoints/test_model.ckpt',
+   'with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4_WM_1e2': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4_WM_1e2/lightning_logs/version_2/checkpoints/ep23_model.ckpt'
 }
 
 ckpt = ckpt_dicts[model_name]

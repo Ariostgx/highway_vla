@@ -15,7 +15,7 @@ from ..backbones.observation import VectorObservationAutoencoder
 from ...auto_labeling.highway_env.lane_change import LaneChangeTaskSpec
 
 class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
-    def __init__(self, llm_backbone: PreTrainedModel, llm_tokenizer: PreTrainedTokenizer, task_spec_func: LaneChangeTaskSpec, obs_dim: int, num_actions: int, hidden_dim: int, mlp_layers: int, loss_weight: dict[str, float] = {"action": 1.0, 'reconst': 1.0, "cot": 1.0, "separator": 1.0, "rollout_stop": 1.0}, cot_mode: str = "none", cot_cfg: dict = {}, max_obs_len: int = 50):
+    def __init__(self, llm_backbone: PreTrainedModel, llm_tokenizer: PreTrainedTokenizer, task_spec_func: LaneChangeTaskSpec, obs_dim: int, num_actions: int, hidden_dim: int, mlp_layers: int, loss_weight: dict[str, float] = {"action": 1.0, 'reconst': 1.0, "cot": 1.0, "separator": 1.0, "rollout_stop": 1.0}, cot_mode: str = "none", cot_cfg: dict = {}, max_obs_len: int = 50, max_token_num: int = 512):
         super().__init__(llm_backbone)
 
         assert cot_mode in ["none", "start", "all"]
@@ -27,6 +27,7 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
         self.task_spec_func = task_spec_func
         self.cot_mode = cot_mode
         self.cot_cfg = cot_cfg
+        self.max_token_num = max_token_num
 
 
         # set up the continuous observation autoencoder
@@ -169,6 +170,9 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
 
 
     def forward(self, batch_data: Tuple[torch.Tensor]) -> Tuple[BaseModelOutputWithPast, torch.Tensor]:
+        import os
+        pid = os.getpid()
+
         observations, actions, valid_mask = batch_data[:3]
 
         B, T = observations.shape[:2]
@@ -183,18 +187,19 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
 
         # process the input strings
         batch_input_strs, batch_index_data = self.obtain_input_strs(batch_data)
-
         # obtain batch_input_ids and batch_attention_mask
         tokenized = self.llm_tokenizer(batch_input_strs, return_tensors="pt", padding=True, truncation=True).to(observations.device)
         batch_input_ids = tokenized.input_ids
         batch_attention_mask = tokenized.attention_mask
 
-        # tokens up to t-1 for input forward pass
+        batch_input_ids = batch_input_ids[:, :self.max_token_num]
+        batch_attention_mask = batch_attention_mask[:, :self.max_token_num]
+
         batch_input_embeds = self.llm_backbone.get_input_embeddings()(batch_input_ids)
-        batch_attention_mask = batch_attention_mask
 
         # autoencode the observations
         obs_embed = self.observation_autoencoder.encode(obs_flatten) # B, T, hidden_dim
+        batch_input_embeds = batch_input_embeds.to(obs_embed.dtype)
         batch_input_embeds, batch_obs_data = self.replace_obs_placeholder_tokens(batch_input_ids, batch_input_embeds, obs_embed, batch_index_data)
         
         batch_label_ignore_mask = self.obtain_ignore_mask(batch_input_ids, batch_attention_mask, batch_obs_data['obs_mask'], batch_index_data)
@@ -207,10 +212,16 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
         batch_attention_mask = batch_attention_mask[:, :-1]
         batch_label_ids = batch_label_ids[:, 1:]
 
+        print(batch_input_embeds.shape)
+
         llm_output = self.llm_backbone(inputs_embeds=batch_input_embeds, attention_mask=batch_attention_mask, output_hidden_states=True)
 
+        # print(f'finish forward, pid: {pid}')
+
         loss_dict = self.compute_loss(llm_output, batch_label_ids, task_masks, obs_flatten, obs_embed, valid_mask, batch_obs_data)
-        
+
+        # print(f'finish compute loss, pid: {pid}')
+
         # return loss_dict, batch_input_embeds
         return loss_dict, batch_input_embeds, batch_label_ids, batch_input_ids, llm_output
 
@@ -225,7 +236,7 @@ class ContObsTokenActionCOTVLAUnifiedToken(BaseVLA):
         all_token_loss = all_token_loss.reshape(B, -1)
 
         for task_name, task_mask in task_masks.items():
-            if not task_mask.any():
+            if not task_mask[:, 1:].any():
                 loss_dict[task_name] = 0
                 continue
             

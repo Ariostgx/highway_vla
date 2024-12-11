@@ -17,14 +17,17 @@ from ..backbones.observation import VectorObservationAutoencoder
 from ...auto_labeling.highway_env.lane_change import LaneChangeTaskSpecCollision
 
 class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnifiedToken):
-    def __init__(self, llm_backbone: PreTrainedModel, llm_tokenizer: PreTrainedTokenizer, task_spec_func: LaneChangeTaskSpecCollision, obs_dim: int, num_actions: int, hidden_dim: int, mlp_layers: int, loss_weight: dict[str, float] = {"action": 1.0, 'reconst': 1.0, "cot": 1.0, "separator": 1.0, "rollout_stop": 1.0, 'wm': 1.0}, cot_mode: str = "none", cot_cfg: dict = {}, max_obs_len: int = 50, use_wm: bool = False, mask_collision_action: bool = False):
-        super().__init__(llm_backbone, llm_tokenizer, task_spec_func, obs_dim, num_actions, hidden_dim, mlp_layers, loss_weight, cot_mode, cot_cfg, max_obs_len)
+    def __init__(self, llm_backbone: PreTrainedModel, llm_tokenizer: PreTrainedTokenizer, task_spec_func: LaneChangeTaskSpecCollision, obs_dim: int, num_actions: int, hidden_dim: int, mlp_layers: int, loss_weight: dict[str, float] = {"action": 1.0, 'reconst': 1.0, "cot": 1.0, "separator": 1.0, "rollout_stop": 1.0, 'wm': 1.0}, cot_mode: str = "none", cot_cfg: dict = {}, max_obs_len: int = 50, use_wm: bool = False, mask_collision_action: bool = False, max_token_num: int = 512):
+        super().__init__(llm_backbone, llm_tokenizer, task_spec_func, obs_dim, num_actions, hidden_dim, mlp_layers, loss_weight, cot_mode, cot_cfg, max_obs_len, max_token_num)
         self.use_wm = use_wm
         self.mask_collision_action = mask_collision_action
 
         assert 'safe_reflect_rate' in cot_cfg, "safe_reflect_rate must be specified in cot_cfg"
         assert 'collide_reflect_rate' in cot_cfg, "collide_reflect_rate must be specified in cot_cfg"
         assert 'collide_rewind_rate' in cot_cfg, "collide_rewind_rate must be specified in cot_cfg"
+        assert 'shortest_seq_rate' in cot_cfg, "shortest_seq_rate must be specified in cot_cfg"
+
+        print('cot_cfg', cot_cfg)
 
         # define reflection tokens
         special_reflect_tokens = ['<BACKSPACE>', '<COMMIT>']
@@ -102,6 +105,8 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
             
             cot_cnt = 0
 
+            use_shortest_seq = np.random.uniform() < self.cot_cfg['shortest_seq_rate']
+
             for obs_idx in range(last_hop_idx + 1):
                 # only add observation + action at the last hop
                 if not valid_mask[bidx, obs_idx]:
@@ -112,12 +117,16 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
 
                 is_safe_step = obs_idx not in cot_tidx
 
-                if is_safe_step:
-                    use_cot = np.random.uniform() < self.cot_cfg['safe_reflect_rate']
-                    safe_cot = True
+                if use_shortest_seq:
+                    use_cot = False
+                    safe_cot = False
                 else:
-                    use_cot = np.random.uniform() < self.cot_cfg['collide_reflect_rate']
-                    safe_cot = np.random.uniform() > self.cot_cfg['collide_rewind_rate']
+                    if is_safe_step:
+                        use_cot = np.random.uniform() < self.cot_cfg['safe_reflect_rate']
+                        safe_cot = True
+                    else:
+                        use_cot = np.random.uniform() < self.cot_cfg['collide_reflect_rate']
+                        safe_cot = np.random.uniform() > self.cot_cfg['collide_rewind_rate']
                 
                 safe_act_id = actions[bidx, obs_idx].cpu().long().item()
 
@@ -202,6 +211,9 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
                     wm_token_id = self.llm_tokenizer(f"<WM_{wm_idx}>", return_tensors="pt").input_ids[0, 0]
                     tidx = (batch_input_ids[bidx] == wm_token_id).nonzero(as_tuple=True)[0]
 
+                    if len(tidx) == 0:
+                        continue
+
                     wm_observation = wm_observations[wm_idx].reshape(-1)
                     wm_embedding = self.observation_autoencoder.encode(wm_observation)
                     batch_input_embeds[bidx][tidx] = wm_embedding
@@ -228,7 +240,8 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
             collision_action_index = batch_index_data['collision_action_index']
             for bidx, atidxs in enumerate(collision_action_index):
                 for tidx in atidxs:
-                    ignore_mask[bidx, tidx] = True
+                    if tidx < ignore_mask.shape[1]:
+                        ignore_mask[bidx, tidx] = True
 
         return ignore_mask
 
@@ -256,21 +269,26 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
     def compute_loss(self, llm_output: BaseModelOutputWithPast, batch_label_ids: torch.Tensor, task_masks: dict[str, torch.Tensor], obs_flatten: torch.Tensor, obs_embed: torch.Tensor, valid_mask: torch.Tensor, batch_obs_data: dict) -> dict[str, torch.Tensor]:
         loss_dict = super().compute_loss(llm_output, batch_label_ids, task_masks, obs_flatten, obs_embed, valid_mask, batch_obs_data)
 
-        if self.to_train_wm and batch_obs_data['wm_target_embeds'] is not None:
+        if self.to_train_wm:
             pred_hidden_states = llm_output.hidden_states[-1]
-            
-            wm_pred_bidx = batch_obs_data['wm_token_bidx']
-            wm_pred_tidx = [tidx - 1 for tidx in batch_obs_data['wm_token_tidx']] # shift target by 1 step
+            if batch_obs_data['wm_target_embeds'] is not None and len(batch_obs_data['wm_token_bidx']) > 0:
+                wm_pred_bidx = batch_obs_data['wm_token_bidx']
+                wm_pred_tidx = [tidx - 1 for tidx in batch_obs_data['wm_token_tidx']] # shift target by 1 step
 
-            wm_pred_hidden_states = pred_hidden_states[wm_pred_bidx, wm_pred_tidx]
-            
-            wm_pred_embeds = self.wm_head(wm_pred_hidden_states)
-            wm_target_embeds = batch_obs_data['wm_target_embeds']
+                wm_pred_hidden_states = pred_hidden_states[wm_pred_bidx, wm_pred_tidx]
+                wm_pred_embeds = self.wm_head(wm_pred_hidden_states)
+                wm_target_embeds = batch_obs_data['wm_target_embeds']
 
-            wm_loss = F.mse_loss(wm_pred_embeds, wm_target_embeds, reduction="mean")
-            loss_dict['wm'] = wm_loss
+                wm_loss = F.mse_loss(wm_pred_embeds, wm_target_embeds, reduction="mean")
+                loss_dict['wm'] = wm_loss
 
-            loss_dict['total'] += wm_loss * self.loss_weight['wm']
+                loss_dict['total'] += wm_loss * self.loss_weight['wm']
+            else:
+                # compute dummy loss for wm to enable DDP
+                wm_pred_hidden_states = pred_hidden_states[0, 0]
+                wm_pred_embeds = self.wm_head(wm_pred_hidden_states)
+                wm_loss = F.mse_loss(wm_pred_embeds, wm_pred_embeds, reduction="mean")
+                loss_dict['total'] += wm_loss * 0.0
 
         return loss_dict
 

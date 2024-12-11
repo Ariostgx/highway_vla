@@ -88,6 +88,7 @@ def main():
     parser.add_argument('--collide_reflect_rate', type=float, default=0.8)
     parser.add_argument('--collide_rewind_rate', type=float, default=0.8)
     parser.add_argument('--max_rewind_step', type=int, default=1)
+    parser.add_argument('--shortest_seq_rate', type=float, default=0.0)
 
     parser.add_argument('--use_wm', action='store_true')
     parser.add_argument('--exp_name', type=str, default='test')
@@ -100,6 +101,8 @@ def main():
     parser.add_argument('--num_epochs', type=int, default=30)
     parser.add_argument('--T_step', type=int, default=711960)
 
+    parser.add_argument('--single_gpu', action='store_true')
+
     args = parser.parse_args()
     
     save_root = '~/results/vla/quick_run_cot_unified_collision'
@@ -109,7 +112,7 @@ def main():
 
     loss_weight = {"action": args.action_weight, "obs": 0.0, 'reconst': args.reconst_weight, "cot": args.cot_weight, "separator": args.separator_weight, "rollout_stop": args.rollout_stop_weight, "wm": args.wm_weight}
 
-    cot_cfg = {'lanes_count': 5, 'max_hop': 4, 'cot_index_mode': 'both', 'action_sample_mode': args.action_sample_mode, 'safe_reflect_rate': args.safe_reflect_rate, 'collide_reflect_rate': args.collide_reflect_rate, 'collide_rewind_rate': args.collide_rewind_rate, 'max_rewind_step': args.max_rewind_step}
+    cot_cfg = {'lanes_count': 5, 'max_hop': 4, 'cot_index_mode': 'both', 'action_sample_mode': args.action_sample_mode, 'safe_reflect_rate': args.safe_reflect_rate, 'collide_reflect_rate': args.collide_reflect_rate, 'collide_rewind_rate': args.collide_rewind_rate, 'max_rewind_step': args.max_rewind_step, 'shortest_seq_rate': args.shortest_seq_rate}
     cot_mode = 'all'
 
     model = LitAutoEncoder(loss_weight, cot_cfg, cot_mode, args.llm_model, use_wm=args.use_wm, mask_collision_action=args.mask_collision_action, T_step=args.T_step)
@@ -118,6 +121,9 @@ def main():
 
     num_gpus = torch.cuda.device_count()
 
+    if args.single_gpu and num_gpus > 1:
+        num_gpus = 1
+
     print(f'Using {num_gpus} GPUs')
     print(f'Saving to {save_path}')
 
@@ -125,8 +131,10 @@ def main():
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_collision, num_workers=4)
 
     if num_gpus > 0:
+        # trainer = L.Trainer(max_epochs=args.num_epochs, accelerator='gpu', devices=num_gpus, default_root_dir=save_path, strategy='ddp_find_unused_parameters_true', log_every_n_steps=50)
         trainer = L.Trainer(max_epochs=args.num_epochs, accelerator='gpu', devices=num_gpus, default_root_dir=save_path, strategy='ddp_find_unused_parameters_true', log_every_n_steps=50)
     else:
+        # trainer = L.Trainer(max_epochs=args.num_epochs, default_root_dir=save_path, strategy='ddp_find_unused_parameters_true', log_every_n_steps=50)
         trainer = L.Trainer(max_epochs=args.num_epochs, default_root_dir=save_path, strategy='ddp_find_unused_parameters_true', log_every_n_steps=50)
 
     if args.ckpt_path is not None:
