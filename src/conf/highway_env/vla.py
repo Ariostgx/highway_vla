@@ -44,7 +44,8 @@ class BaseExperiment:
         'ckpt_path': "",
 
         'lr': 1e-3,
-        'batch_size': 18,
+        'batch_size': 12,
+        'gradient_accumulation_steps': 1,
         'num_epochs': 30,
         'T_step': 711960,
         'num_workers': 4,

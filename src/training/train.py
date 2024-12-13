@@ -74,7 +74,11 @@ def main():
 
     if ckpt_path is not None:
         print(f'Loading checkpoint from {ckpt_path}')
-        accelerator.load_state(ckpt_path)
+        try:
+            accelerator.load_state(ckpt_path)
+        except Exception as e:
+            print(f'Failed to load checkpoint from {ckpt_path}, error: {e}')
+            print(f'training from scratch')
     else:
         print('No checkpoint found, starting from scratch')
 
@@ -171,10 +175,13 @@ def train(model, optimizer, lr_scheduler, train_dataloader, rollout_dataloader, 
             loss = loss_dict['total']
 
             accelerator.backward(loss)
-            optimizer.step()
-            optimizer.zero_grad()
 
-            lr_scheduler.step()
+            if (step+1) % args.gradient_accumulation_steps == 0:
+                optimizer.step()
+                lr_scheduler.step()
+                optimizer.zero_grad()
+                # print('optimizer step done')
+
             step += 1
 
             progress_bar.set_postfix(loss=loss.item())
