@@ -3,6 +3,7 @@ import sys
 import glob
 import wandb
 import json
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torch import nn
@@ -16,12 +17,15 @@ from accelerate.utils import LoggerType, ProjectConfiguration
 
 sys.path.append('/u/shuhan/projects/vla')
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from src.environments.highway_env.dataset import HighwayCollisionDataset, collate_fn_collision
+from src.environments.highway_env.dataset import HighwayCollisionDataset, collate_fn_collision, HighwayEnvInitStateDataset, collate_fn_env_init_state
 from src.models.vlas.cont_obs_token_action_cot_unified_token_collision import ContObsTokenActionCOTVLAUnifiedTokenCollision
 from src.auto_labeling.highway_env.lane_change import LaneChangeTaskSpecCollision
 from src.conf.highway_env.vla import get_config
+from src.inference.highway_env.rollout import rollout_one_episode
+
 
 torch.set_float32_matmul_precision('high')
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Main function
 def main():
@@ -33,13 +37,14 @@ def main():
     save_path = os.path.expanduser(save_path)
     os.makedirs(save_path, exist_ok=True)
 
-    ckpt_folders = glob.glob(os.path.join(save_path, 'checkpoints/*'))
-    if len(ckpt_folders) > 0 and not args.always_from_scratch:
-        ckpt_path = sorted(ckpt_folders)[-1]
-        print(f'Loading checkpoint from {ckpt_path}')
+    if len(args.ckpt_path) > 0:
+        ckpt_path = args.ckpt_path
     else:
-        print('No checkpoint found, starting from scratch')
-        ckpt_path = None
+        ckpt_folders = glob.glob(os.path.join(save_path, 'checkpoints/*'))
+        if len(ckpt_folders) > 0 and not args.always_from_scratch:
+            ckpt_path = sorted(ckpt_folders)[-1]
+        else:
+            ckpt_path = None
     
     # # Step 2: Initialize Accelerator
     project_config = ProjectConfiguration(project_dir=save_path, automatic_checkpoint_naming=True, 
@@ -56,7 +61,7 @@ def main():
         wandb.init(project='vla_highwayenv', name=f'{args.exp_name}_{time_str}', config=vars(args))
 
     # Step 4: Load dataset and dataloader
-    train_dataloader = setup_dataset(args)
+    train_dataloader, rollout_dataloader = setup_dataset(args)
 
     # Step 5: Initialize model
     model = setup_model(args, loss_weight, cot_cfg)
@@ -65,16 +70,24 @@ def main():
     lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.T_step)
 
     # Step 7: Prepare everything with Accelerator
-    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, train_dataloader, lr_scheduler)
+    model, optimizer, train_dataloader, rollout_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, train_dataloader, rollout_dataloader, lr_scheduler)
 
     if ckpt_path is not None:
+        print(f'Loading checkpoint from {ckpt_path}')
         accelerator.load_state(ckpt_path)
+    else:
+        print('No checkpoint found, starting from scratch')
 
     # Step 8: Train the model
-    train(model, optimizer, lr_scheduler, train_dataloader, accelerator, args)
+    if args.rollout_only:
+        step = 0
+        rollout(model, step, rollout_dataloader, accelerator, args)
+    else:
+        train(model, optimizer, lr_scheduler, train_dataloader, rollout_dataloader, accelerator, args, save_path)
 
     accelerator.end_training()
-    wandb.finish()
+    if accelerator.is_main_process:
+        wandb.finish()
 
 # Setup configuration
 def setup_config():
@@ -96,24 +109,17 @@ def setup_logging(log_dir):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-# Dataset
-class DummyDataset(Dataset):
-    def __init__(self, size):
-        self.data = torch.randn(size, 3, 224, 224)
-        self.labels = torch.randint(0, 10, (size,))
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        return self.data[idx], self.labels[idx]
-
 def setup_dataset(args):
     data_folder = '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_train_collision'
     dataset = HighwayCollisionDataset(data_folder, overfit=args.overfit)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_collision, num_workers=args.num_workers)
 
-    return dataloader
+    rollout_data_path = '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_env/rollouts_env_states_8_sample.pkl'
+    # rollout_data_path = '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_env/rollouts_env_states_1k.pkl'
+    rollout_dataset = HighwayEnvInitStateDataset(rollout_data_path)
+    rollout_dataloader = DataLoader(rollout_dataset, batch_size=1, shuffle=False, collate_fn=collate_fn_env_init_state, num_workers=args.num_workers)
+
+    return dataloader, rollout_dataloader
 
 # Model
 def setup_model(args, loss_weight, cot_cfg):
@@ -150,8 +156,10 @@ def setup_model(args, loss_weight, cot_cfg):
     return model
 
 # Training loop
-def train(model, optimizer, lr_scheduler, train_dataloader, accelerator, args):
+def train(model, optimizer, lr_scheduler, train_dataloader, rollout_dataloader, accelerator, args, save_path):
     step = 0
+    best_collision_rate = 1.0
+    best_collision_step = 0
     for epoch in range(args.num_epochs):
         model.train()
         progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.num_epochs}")
@@ -176,7 +184,83 @@ def train(model, optimizer, lr_scheduler, train_dataloader, accelerator, args):
                 accelerator.save_state()
             
             if step % args.log_freq == 0 and accelerator.is_main_process:
-                wandb.log(loss_dict, step=step)
+                for k, v in loss_dict.items():
+                    wandb.log({f'train/loss_{k}': v}, step=step)
+            
+            if step % args.rollout_steps == 0:
+                rollout_collision_rate = rollout(model, step, rollout_dataloader, accelerator, args)
+                if rollout_collision_rate < best_collision_rate:
+                    if accelerator.is_main_process:
+                        print(f'New best collision rate: {rollout_collision_rate}, step: {step}')
+    
+                        prev_best_path = os.path.join(save_path, f'checkpoints/checkpoint_best_collision_step_{best_collision_step}')
+                        best_model_path = os.path.join(save_path, f'checkpoints/checkpoint_best_collision_step_{step}')
+                        
+                        print(f'Saving checkpoint to {best_model_path}')
+                        os.makedirs(best_model_path, exist_ok=True)
+                        model_state_dict = model.state_dict()
+                        torch.save(model_state_dict, best_model_path+'/model.pth')
+
+                        if os.path.exists(prev_best_path):
+                            os.remove(prev_best_path)
+
+                    best_collision_rate = rollout_collision_rate
+                    best_collision_step = step
+
+def rollout(model, step, rollout_dataloader, accelerator, args):
+    model.eval()
+    machine_id = accelerator.local_process_index
+    progress_bar = tqdm(rollout_dataloader, desc=f"Rollout at process {machine_id}")
+
+    score_names = ['exact_match_score', 'subset_coverage', 'rollout_collision', 'model_failed', 'action_count', 'token_count', 'collision_detect_recall', 'rewind_precision', 'rewind_collision_avoid_rate', 'model_rewind_ratio', 'reached_goal', 'exceeded_length']
+
+    # collect scores for model and env
+    wm_modes = ['model', 'env']
+    all_mode_scores = {mode: {k: [] for k in score_names} for mode in wm_modes}
+    with torch.no_grad():
+        for env_state_cache, path_info in rollout_dataloader:
+            for mode in wm_modes:
+                # only support batch-size 1 rollout for now
+                scores = rollout_one_episode(model.module, env_state_cache[0], path_info[0], use_wm=True, wm_mode=mode, cot_mode='pred', max_rewind_step=args.max_rewind_step)
+                for k, v in scores.items():
+                    if v is not None:
+                        all_mode_scores[mode][k].append(v)
+            progress_bar.update(1)
+        progress_bar.close()
+
+    # Convert scores to tensors and move to the device
+    local_mean_scores = {
+        mode: {
+            k: torch.tensor(np.mean(v), device=accelerator.device) if len(v) > 0 else torch.tensor(0.0, device=accelerator.device)
+            for k, v in all_mode_scores[mode].items()
+        }
+        for mode in wm_modes
+    }
+
+    # print(f'machine_id: {machine_id}, local_mean_scores: {local_mean_scores}')
+
+    # Gather all scores across devices
+    global_scores = {mode: {k: [] for k in score_names} for mode in wm_modes}
+    for mode in wm_modes:
+        for k in score_names:
+            gathered_scores = accelerator.gather(local_mean_scores[mode][k])
+            global_scores[mode][k] = gathered_scores.cpu()
+
+    # print(f'machine_id: {machine_id}, global_scores: {global_scores}')
+    # print('machine_id: ', machine_id, 'finished gathering')
+    
+    if accelerator.is_main_process:
+        # print('machine_id: ', machine_id, 'start logging')
+        for mode in wm_modes:
+            for k, v in global_scores[mode].items():
+                wandb.log({f'rollout_{mode}_pred/{k}': torch.mean(v).item()}, step=step)
+    
+
+    # print('machine_id: ', machine_id, 'finished logging')
+
+    # # return the rollout collision rate for checkpointing
+    return global_scores['env']['rollout_collision'].mean().item()
+            
 
 # Run the script
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ class BaseExperiment:
         'llm_model': 'SmolLM2-135M-Instruct',  # 'gpt2', 'SmolLM2-135M-Instruct'
         'overfit': False,
         'mask_collision_action': False,
-        'ckpt_path': None,
+        'ckpt_path': "",
 
         'lr': 1e-3,
         'batch_size': 18,
@@ -49,6 +49,7 @@ class BaseExperiment:
         'T_step': 711960,
         'num_workers': 4,
         'save_steps': 10000,
+        'rollout_steps': 20000,
         'max_token_num': 464,
         'log_freq': 50,
 
@@ -56,6 +57,7 @@ class BaseExperiment:
         'fp16': False,
         'torch_compile': False,
         'always_from_scratch': False,
+        'rollout_only': False,
     }
 
     def __init__(self):

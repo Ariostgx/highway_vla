@@ -1,6 +1,0 @@
-accelerate launch --config_file /u/shuhan/projects/vla/scripts/accl_train/8gpu.yaml /u/shuhan/projects/vla/src/training/train.py --save_steps 10000 --use_wm --safe_reflect_rate 0.2 --collide_reflect_rate 0.8 --collide_rewind_rate 0.8 --batch_size 6 --max_rewind_step 4 --exp_name with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4_360M --action_sample_mode random --llm_model HuggingFaceTB/SmolLM2-360M-Instruct --wm_weight 1.0
-
-accelerate launch --config_file /u/shuhan/projects/vla/scripts/accl_train/4gpu.yaml /u/shuhan/projects/vla/src/training/train.py --save_steps 10000 --use_wm --safe_reflect_rate 0.2 --collide_reflect_rate 0.8 --collide_rewind_rate 0.8 --batch_size 12 --max_rewind_step 4 --exp_name with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4_short_seq_freq_0.2  --action_sample_mode random --wm_weight 1.0 --shortest_seq_rate 0.2
-
-accelerate launch --config_file /u/shuhan/projects/vla/scripts/accl_train/4gpu.yaml /u/shuhan/projects/vla/src/training/train.py --save_steps 10000 --use_wm --safe_reflect_rate 0.2 --collide_reflect_rate 0.8 --collide_rewind_rate 0.8 --batch_size 12 --max_rewind_step 4 --exp_name with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4_short_seq_freq_0.5  --action_sample_mode random --wm_weight 1.0 --shortest_seq_rate 0.5
-

@@ -1,6 +1,6 @@
-# build a dataset using cached observations and actions
 import os
 import torch
+import pickle
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
@@ -106,11 +106,26 @@ def collate_fn_collision(batch):
 
     return observations, actions, valid_mask, collision_rewind_steps_padded, collision_observations_padded, collision_actions_padded, collision_valid_mask
 
+class HighwayEnvInitStateDataset(Dataset):
+    def __init__(self, data_dir: str):
+        self.data_dir = data_dir
+        with open(data_dir, 'rb') as f:
+            self.data = pickle.load(f)
+
+    def __len__(self):
+        return len(self.data['env_states'])
+    
+    def __getitem__(self, idx):
+        return self.data['env_states'][idx], self.data['path_infos'][idx]
+
+def collate_fn_env_init_state(batch):
+    env_states, path_infos = zip(*batch)
+    return env_states, path_infos
+
 if __name__ == '__main__':
 
   data_folder = '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action/rollouts'
 
   dataset = HighwayDataset(data_folder)
-
   # define the dataloader
   dataloader = DataLoader(dataset, batch_size=32, shuffle=True, collate_fn=collate_fn)

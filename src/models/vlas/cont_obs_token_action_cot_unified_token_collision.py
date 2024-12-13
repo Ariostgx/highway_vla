@@ -8,7 +8,7 @@ import numpy as np
 
 from transformers import PreTrainedModel, PreTrainedTokenizer
 from transformers.modeling_outputs import BaseModelOutputWithPast
-from transformers.cache_utils import Cache
+# from transformers.cache_utils import Cache
 
 from .cont_obs_token_action_cot_unified_token import ContObsTokenActionCOTVLAUnifiedToken
 from ..backbones.mlp import MLP
@@ -309,7 +309,7 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
         input_embeds = torch.cat([past_input_embeds, curr_input_embeds], dim=1)
 
         eoa_token_id = self.llm_tokenizer("<EOA>", return_tensors="pt").input_ids[0, 0]
-        curr_output = self.llm_backbone.generate(inputs_embeds=input_embeds, use_cache=False, past_key_values=None, return_dict_in_generate=True, eos_token_id=eoa_token_id, **generate_cfg)
+        curr_output = self.llm_backbone.generate(inputs_embeds=input_embeds, return_dict_in_generate=True, eos_token_id=eoa_token_id, **generate_cfg)
 
         new_generated_ids = curr_output.sequences[0]
         new_generated_str = self.llm_tokenizer.decode(new_generated_ids, skip_special_tokens=False)
@@ -416,7 +416,7 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
     def cot_commit_inference(self, past_input_embeds: torch.Tensor, past_input_str: str, generate_cfg: dict, ending_token='<COMMIT>'):
         commit_token_id = self.llm_tokenizer(ending_token, return_tensors="pt").input_ids[0, 0]
 
-        curr_output = self.llm_backbone.generate(inputs_embeds=past_input_embeds, use_cache=False, past_key_values=None, return_dict_in_generate=True, eos_token_id=commit_token_id, **generate_cfg)
+        curr_output = self.llm_backbone.generate(inputs_embeds=past_input_embeds, return_dict_in_generate=True, eos_token_id=commit_token_id, **generate_cfg)
 
         new_generated_ids = curr_output.sequences[0]
         new_generated_str = self.llm_tokenizer.decode(new_generated_ids, skip_special_tokens=False)
