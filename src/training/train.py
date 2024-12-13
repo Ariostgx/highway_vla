@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torch import nn
-from torch.optim import Adam
+from torch.optim import AdamW
 from accelerate import Accelerator
 from transformers import get_scheduler
 from tqdm import tqdm
@@ -66,8 +66,11 @@ def main():
     # Step 5: Initialize model
     model = setup_model(args, loss_weight, cot_cfg)
     # Step 6: Setup optimizer and scheduler
-    optimizer = Adam(model.parameters(), lr=args.lr)
-    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.T_step)
+    optimizer = AdamW(model.parameters(), lr=args.lr, eps=1e-8, betas=(0.9, 0.98), weight_decay = 1e-1)
+
+    lr_scheduler = get_scheduler(
+        "cosine", optimizer=optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=args.num_epochs*len(train_dataloader) / args.gradient_accumulation_steps
+    )
 
     # Step 7: Prepare everything with Accelerator
     model, optimizer, train_dataloader, rollout_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, train_dataloader, rollout_dataloader, lr_scheduler)
@@ -118,8 +121,8 @@ def setup_dataset(args):
     dataset = HighwayCollisionDataset(data_folder, overfit=args.overfit)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_collision, num_workers=args.num_workers)
 
-    rollout_data_path = '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_env/rollouts_env_states_8_sample.pkl'
-    # rollout_data_path = '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_env/rollouts_env_states_1k.pkl'
+    # rollout_data_path = '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_env/rollouts_env_states_8_sample.pkl'
+    rollout_data_path = '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_env/rollouts_env_states_1k.pkl'
     rollout_dataset = HighwayEnvInitStateDataset(rollout_data_path)
     rollout_dataloader = DataLoader(rollout_dataset, batch_size=1, shuffle=False, collate_fn=collate_fn_env_init_state, num_workers=args.num_workers)
 
@@ -164,6 +167,9 @@ def train(model, optimizer, lr_scheduler, train_dataloader, rollout_dataloader, 
     step = 0
     best_collision_rate = 1.0
     best_collision_step = 0
+
+    scaler = torch.amp.GradScaler('cuda', enabled=args.fp16)
+
     for epoch in range(args.num_epochs):
         model.train()
         progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.num_epochs}")
@@ -174,13 +180,19 @@ def train(model, optimizer, lr_scheduler, train_dataloader, rollout_dataloader, 
             loss_dict = outputs[0]
             loss = loss_dict['total']
 
-            accelerator.backward(loss)
+            accelerator.backward(scaler.scale(loss))
 
             if (step+1) % args.gradient_accumulation_steps == 0:
+                if args.loss_clip > 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.loss_clip)
+
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
-                # print('optimizer step done')
+                
+                scaler.step(optimizer)
+                scaler.update()
 
             step += 1
 
@@ -189,10 +201,11 @@ def train(model, optimizer, lr_scheduler, train_dataloader, rollout_dataloader, 
             # Save checkpoint periodically
             if step % args.save_steps == 0:
                 accelerator.save_state()
-            
+
             if step % args.log_freq == 0 and accelerator.is_main_process:
                 for k, v in loss_dict.items():
                     wandb.log({f'train/loss_{k}': v}, step=step)
+                    wandb.log({f'train/lr': optimizer.param_groups[0]['lr']}, step=step)
             
             if step % args.rollout_steps == 0:
                 rollout_collision_rate = rollout(model, step, rollout_dataloader, accelerator, args)
