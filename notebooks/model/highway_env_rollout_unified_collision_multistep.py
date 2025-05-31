@@ -26,6 +26,7 @@ parser.add_argument('--rollout_count', type=int, default=1000, help='Number of r
 parser.add_argument('--wm_mode', type=str, default='model', help='World Model mode')
 parser.add_argument('--cot_mode', type=str, default='pred', help='Chain of thought inference mode') # pred, always, never
 parser.add_argument('--max_rewind_step', type=int, default=4, help='Maximum rewind step')
+parser.add_argument('--random_seed', type=int, default=0, help='Random seed')
 
 args = parser.parse_args()
 
@@ -59,11 +60,11 @@ cot_cfg = {
 
 
 ckpt_dicts = {
-   'rewind_4_overfit': '~/results/vla/quick_run_cot_unified_collision/max_rewind_step_4_overfit/lightning_logs/version_2/checkpoints/test.ckpt',
-   'with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act_max_rewind_step_4': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act_max_rewind_step_4/lightning_logs/version_3/checkpoints/test_model.ckpt',
-   'with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_2': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_2/lightning_logs/version_2/checkpoints/test_model.ckpt',
-   'with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4/lightning_logs/version_1/checkpoints/test_model.ckpt',
-   'with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4_WM_1e2': '~/results/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4_WM_1e2/lightning_logs/version_2/checkpoints/ep23_model.ckpt'
+   'rewind_4_overfit': '/storage/Models/shuhan/vla/quick_run_cot_unified_collision/max_rewind_step_4_overfit/lightning_logs/version_2/checkpoints/test.ckpt',
+   'with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act_max_rewind_step_4': '/storage/Models/shuhan/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_mask_collision_act_max_rewind_step_4/lightning_logs/version_3/checkpoints/test_model.ckpt',
+   'with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_2': '/storage/Models/shuhan/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_2/lightning_logs/version_2/checkpoints/test_model.ckpt',
+   'with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4': '/storage/Models/shuhan/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4/lightning_logs/version_1/checkpoints/test_model.ckpt',
+   'with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4_WM_1e2': '/storage/Models/shuhan/vla/quick_run_cot_unified_collision/with_wm_cr_0.8_re_0.8_sr_0.2_max_rewind_step_4_WM_1e2/lightning_logs/version_2/checkpoints/ep23_model.ckpt'
 }
 
 ckpt = ckpt_dicts[model_name]
@@ -274,18 +275,19 @@ def rollout_one_episode(model, goal_spec_dataset, use_wm, wm_mode, cot_mode):
         'exceeded_length': exceeded_length
     }
 
-exp_name = f'{model_name}_wm_{wm_mode}_cot_{cot_mode}'
+random_seed = args.random_seed
+exp_name = f'{model_name}_wm_{wm_mode}_cot_{cot_mode}_seed_{random_seed}'
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 print(exp_name)
 print(device)
 
 # # Model Loading
-llm_model = 'HuggingFaceTB/SmolLM2-135M-Instruct'
+llm_model = '/storage/Models/shuhan/llms/SmolLM2-135M-Instruct'
 llm_backbone = AutoModelForCausalLM.from_pretrained(llm_model)
 tokenizer = AutoTokenizer.from_pretrained(llm_model)
 
-hidden_dim = 576 if llm_model == 'HuggingFaceTB/SmolLM2-135M-Instruct' else 768
+hidden_dim = 576 if 'SmolLM2-135M-Instruct' in llm_model else 768
 obs_dim = 25
 num_actions = 5
 mlp_layers = 2
@@ -300,6 +302,12 @@ ori_ckpt = {k[4:]: v for k, v in lg_ckpt.items() if k.startswith('vla.')}
 model.load_state_dict(ori_ckpt)
 
 model.to(device)
+
+torch.manual_seed(random_seed)
+torch.cuda.manual_seed(random_seed)
+torch.cuda.manual_seed_all(random_seed)
+np.random.seed(random_seed)
+random.seed(random_seed)
 
 # Load Goal Specification Dataset
 goal_spec_dataset_path = '/u/shuhan/projects/vla/data/highway_env/lane_change_goal_spec_data.pkl'

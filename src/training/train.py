@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torch import nn
-from torch.optim import AdamW
+from torch.optim import AdamW, Adam
 from accelerate import Accelerator
 from transformers import get_scheduler
 from tqdm import tqdm
@@ -65,12 +65,25 @@ def main():
 
     # Step 5: Initialize model
     model = setup_model(args, loss_weight, cot_cfg)
+    
     # Step 6: Setup optimizer and scheduler
-    optimizer = AdamW(model.parameters(), lr=args.lr, eps=1e-8, betas=(0.9, 0.98), weight_decay = 1e-1)
+    if args.optimizer == 'adamw':
+        optimizer = AdamW(model.parameters(), lr=args.lr, eps=1e-8, betas=(0.9, 0.98), weight_decay = 1e-1)
+    elif args.optimizer == 'adamw_default':
+        optimizer = AdamW(model.parameters(), lr=args.lr)
+    elif args.optimizer == 'adam':
+        optimizer = Adam(model.parameters(), lr=args.lr)
+    else:
+        raise ValueError(f'Unknown optimizer: {args.optimizer}')
 
-    lr_scheduler = get_scheduler(
-        "cosine", optimizer=optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=args.num_epochs*len(train_dataloader) / args.gradient_accumulation_steps
-    )
+    if args.lr_scheduler == 'cosine':
+        lr_scheduler = get_scheduler(
+            "cosine", optimizer=optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=args.num_epochs*len(train_dataloader) / args.gradient_accumulation_steps
+        )
+    elif args.lr_scheduler == 'constant':
+        lr_scheduler = get_scheduler("constant", optimizer=optimizer)
+    else:
+        raise ValueError(f'Unknown lr scheduler: {args.lr_scheduler}')
 
     # Step 7: Prepare everything with Accelerator
     model, optimizer, train_dataloader, rollout_dataloader, lr_scheduler = accelerator.prepare(model, optimizer, train_dataloader, rollout_dataloader, lr_scheduler)

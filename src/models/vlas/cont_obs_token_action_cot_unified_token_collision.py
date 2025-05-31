@@ -28,6 +28,7 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
         assert 'shortest_seq_rate' in cot_cfg, "shortest_seq_rate must be specified in cot_cfg"
 
         print('cot_cfg', cot_cfg)
+        print('loss weight', loss_weight)
 
         # define reflection tokens
         special_reflect_tokens = ['<BACKSPACE>', '<COMMIT>']

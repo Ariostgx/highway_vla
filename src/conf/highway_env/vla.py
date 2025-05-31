@@ -23,7 +23,7 @@ class BaseExperiment:
 
     DEFAULTS = {
         'action_weight': 1.0,
-        'reconst_weight': 10.0,
+        'reconst_weight': 1.0,
         'cot_weight': 1.0,
         'separator_weight': 1.0,
         'rollout_stop_weight': 1.0,
@@ -44,16 +44,18 @@ class BaseExperiment:
         'ckpt_path': "",
 
         'lr': 1e-3,
+        'lr_scheduler': 'cosine',
         'batch_size': 12,
         'gradient_accumulation_steps': 1,
-        'num_epochs': 30,
+        'num_epochs': 5,
         'warmup_steps': 100,
         'num_workers': 4,
         'save_steps': 10000,
         'rollout_steps': 20000,
-        'max_token_num': 464,
+        'max_token_num': 512,
         'log_freq': 20,
         'loss_clip': 1.0,
+        'optimizer': 'adamw',
 
         'single_gpu': False,
         'fp16': False,
