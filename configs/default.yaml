@@ -1,0 +1,37 @@
+# Model weights
+action_weight: 1.0
+reconst_weight: 10.0
+cot_weight: 1.0
+separator_weight: 1.0
+rollout_stop_weight: 1.0
+wm_weight: 1.0
+
+# Training configuration
+action_sample_mode: 'future'  # 'random', 'future'
+safe_reflect_rate: 0.3
+collide_reflect_rate: 0.8
+collide_rewind_rate: 0.8
+max_rewind_step: 1
+shortest_seq_rate: 0.0
+
+# Model settings
+use_wm: false
+exp_name: 'debug'
+llm_model: 'HuggingFaceTB/SmolLM2-135M-Instruct'  # 'gpt2', 'HuggingFaceTB/SmolLM2-135M-Instruct'
+overfit: false
+mask_collision_action: false
+ckpt_path: null
+
+# Training hyperparameters
+batch_size: 18
+num_epochs: 30
+T_step: 711960
+single_gpu: false
+
+# Data paths
+data_folder: '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_train_collision'
+save_root: '~/results/vla/quick_run_cot_unified_collision'
+
+# Wandb configuration
+wandb:
+  project: 'vla_training'
