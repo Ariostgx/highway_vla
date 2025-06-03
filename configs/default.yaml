@@ -28,8 +28,29 @@ num_epochs: 30
 T_step: 711960
 single_gpu: false
 
+# Optimizer and scheduler settings
+optimizer: 'adamw'  # 'adamw', 'adamw_default', 'adam'
+lr: 1e-3
+lr_scheduler: 'cosine'  # 'cosine', 'constant'
+warmup_steps: 0
+gradient_accumulation_steps: 1
+loss_clip: 1.0
+
+# Training control
+fp16: false
+torch_compile: false
+rollout_only: false
+
+# Logging and checkpointing
+save_steps: 1000
+log_freq: 50
+rollout_steps: 5000
+num_workers: 4
+max_token_num: 512
+
 # Data paths
 data_folder: '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_train_collision'
+rollout_data_path: '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_env/rollouts_env_states_1k.pkl'
 save_root: '~/results/vla/quick_run_cot_unified_collision'
 
 # Wandb configuration

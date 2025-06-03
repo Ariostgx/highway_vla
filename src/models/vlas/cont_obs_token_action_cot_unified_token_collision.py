@@ -8,7 +8,7 @@ import numpy as np
 
 from transformers import PreTrainedModel, PreTrainedTokenizer
 from transformers.modeling_outputs import BaseModelOutputWithPast
-# from transformers.cache_utils import Cache
+from transformers.cache_utils import Cache
 
 from .cont_obs_token_action_cot_unified_token import ContObsTokenActionCOTVLAUnifiedToken
 from ..backbones.mlp import MLP
@@ -26,9 +26,6 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
         assert 'collide_reflect_rate' in cot_cfg, "collide_reflect_rate must be specified in cot_cfg"
         assert 'collide_rewind_rate' in cot_cfg, "collide_rewind_rate must be specified in cot_cfg"
         assert 'shortest_seq_rate' in cot_cfg, "shortest_seq_rate must be specified in cot_cfg"
-
-        print('cot_cfg', cot_cfg)
-        print('loss weight', loss_weight)
 
         # define reflection tokens
         special_reflect_tokens = ['<BACKSPACE>', '<COMMIT>']
@@ -86,9 +83,9 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
 
             valid_mask_b = valid_mask[bidx]
             cot_valid_mask_b = cot_valid_mask[bidx]
-            task_spec = self.task_spec_func(observations[bidx][valid_mask_b].cpu().numpy(), actions[bidx][valid_mask_b].cpu().numpy(), 
-                                            cot_obs[bidx][cot_valid_mask_b].cpu().numpy(), cot_acts[bidx][cot_valid_mask_b].cpu().numpy(), 
-                                            cot_rewind_steps[bidx][cot_valid_mask_b].cpu().numpy(), self.cot_cfg)
+            task_spec = self.task_spec_func(observations[bidx][valid_maskb].cpu().numpy(), actions[bidx][valid_maskb].cpu().numpy(), 
+                                            cot_obs[bidx][cot_valid_maskb].cpu().numpy(), cot_acts[bidx][cot_valid_maskb].cpu().numpy(), 
+                                            cot_rewind_steps[bidx][cot_valid_maskb].cpu().numpy(), self.cot_cfg)
             
             goal_spec = task_spec.get_goal_spec()
             cot_prompt = task_spec.get_multi_step_cot_prompt()
@@ -310,7 +307,13 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
         input_embeds = torch.cat([past_input_embeds, curr_input_embeds], dim=1)
 
         eoa_token_id = self.llm_tokenizer("<EOA>", return_tensors="pt").input_ids[0, 0]
-        curr_output = self.llm_backbone.generate(inputs_embeds=input_embeds, return_dict_in_generate=True, eos_token_id=eoa_token_id, **generate_cfg)
+        curr_output = self.llm_backbone.generate(
+            inputs_embeds=input_embeds,
+            return_dict_in_generate=True,
+            eos_token_id=eoa_token_id,
+            use_cache=True,
+            **generate_cfg
+        )
 
         new_generated_ids = curr_output.sequences[0]
         new_generated_str = self.llm_tokenizer.decode(new_generated_ids, skip_special_tokens=False)
@@ -318,10 +321,11 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
 
         update_str = curr_input_str + new_generated_str
         update_embeddings = torch.cat([curr_input_embeds, new_generated_embeds[None, :]], dim=1)
+        past_key_values = curr_output.past_key_values
 
-        return update_str, update_embeddings
+        return update_str, update_embeddings, past_key_values
 
-    def cot_start_inference(self, past_input_embeds: torch.Tensor | None, past_input_str: str, cot_mode: str, use_wm: bool):
+    def cot_start_inference(self, past_input_embeds: torch.Tensor | None, past_input_str: str, past_key_values: Cache, cot_mode: str, use_wm: bool):
         '''
         Decide to do CoT or not, different modes: 
             Use WM:
@@ -335,14 +339,19 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
         '''
         if not use_wm:
             if cot_mode == 'pred':
-                return "", None
+                return "", None, past_key_values
             elif cot_mode == 'always':
                 curr_input_str = "<BOT>"
             elif cot_mode == 'never':
                 curr_input_str = "<COMMIT>"
         else:
             if cot_mode == 'pred':
-                llm_output = self.llm_backbone.forward(inputs_embeds=past_input_embeds)
+                cached_len = past_key_values[0][0].shape[2]
+                llm_output = self.llm_backbone.forward(
+                    inputs_embeds=past_input_embeds[:, cached_len:],
+                    past_key_values=past_key_values,
+                    use_cache=True
+                )
                 llm_logits = llm_output.logits[0, -1, :]
 
                 bwm_token_id = self.llm_tokenizer("<BWM>", return_tensors="pt").input_ids[0, 0].item()
@@ -365,9 +374,17 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
         update_str = curr_input_str
         update_embeddings = curr_input_embeds
 
-        return update_str, update_embeddings
+        # Forward pass to update KV cache
+        llm_output = self.llm_backbone.forward(
+            inputs_embeds=curr_input_embeds,
+            past_key_values=past_key_values,
+            use_cache=True
+        )
+        past_key_values = llm_output.past_key_values
 
-    def cot_append_wm_embeddings(self, past_input_embeds: torch.Tensor, past_input_str: str, wm_obs: torch.Tensor|None):
+        return update_str, update_embeddings, past_key_values
+
+    def cot_append_wm_embeddings(self, past_input_embeds: torch.Tensor, past_input_str: str, past_key_values: Cache, wm_obs: torch.Tensor|None):
         '''
         Append the WM embeddings to the past input embeddings, the last token is <BWM>.
 
@@ -378,9 +395,18 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
         if wm_obs is not None:
             wm_embed = self.observation_autoencoder.encode(wm_obs.reshape(1, -1))
         else:
-            llm_output = self.llm_backbone.forward(inputs_embeds=past_input_embeds, output_hidden_states=True)
+            # print('Before STEP 3.1, past_input_embeds.shape', past_input_embeds.shape)
+            # print('Before STEP 3.1, past_key_values[0][0].shape', past_key_values[0][0].shape)
+            cached_len = past_key_values[0][0].shape[2]
+            llm_output = self.llm_backbone.forward(
+                inputs_embeds=past_input_embeds[:, cached_len:],
+                past_key_values=past_key_values,
+                use_cache=True,
+                output_hidden_states=True
+            )
             wm_pred_input = llm_output.hidden_states[-1][:, -1, :]
             wm_embed = self.wm_head(wm_pred_input)
+            past_key_values = llm_output.past_key_values
 
         ewm_token_id = self.llm_tokenizer("<EWM>", return_tensors="pt").input_ids[0, 0].item()
         ewm_token_embed = self.llm_backbone.get_input_embeddings()(torch.tensor([ewm_token_id], device=past_input_embeds.device))
@@ -389,11 +415,27 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
         update_str = f"<WM_{wm_cnt}>" + "<EWM>"
         update_embeddings = torch.cat([wm_embed[None, :], ewm_token_embed[None, :]], dim=1)
 
-        return update_str, update_embeddings
+        # update KV cache
+        llm_output = self.llm_backbone.forward(
+            inputs_embeds=update_embeddings,
+            past_key_values=past_key_values,
+            use_cache=True
+        )
+        past_key_values = llm_output.past_key_values
 
-    def cot_end_inference(self, past_input_embeds: torch.Tensor | None, past_input_str: str):
-        llm_output = self.llm_backbone.forward(inputs_embeds=past_input_embeds)
+        return update_str, update_embeddings, past_key_values
+
+    def cot_end_inference(self, past_input_embeds: torch.Tensor | None, past_input_str: str, past_key_values: Cache):
+        cached_len = past_key_values[0][0].shape[2]
+        if cached_len == past_input_embeds.shape[1]:
+            cached_len = cached_len - 1
+        llm_output = self.llm_backbone.forward(
+            inputs_embeds=past_input_embeds[:, cached_len:],
+            past_key_values=past_key_values,
+            use_cache=True
+        )
         llm_logits = llm_output.logits[0, -1, :]
+        past_key_values = llm_output.past_key_values
 
         backspace_token_id = self.llm_tokenizer("<BACKSPACE>", return_tensors="pt").input_ids[0, 0].item()
         commit_token_id = self.llm_tokenizer("<COMMIT>", return_tensors="pt").input_ids[0, 0].item()
@@ -411,19 +453,104 @@ class ContObsTokenActionCOTVLAUnifiedTokenCollision(ContObsTokenActionCOTVLAUnif
         update_str = curr_input_str
         update_embeddings = curr_input_embeds
 
-        return update_str, update_embeddings
+        return update_str, update_embeddings, past_key_values
 
+    def cot_commit_inference(
+        self,
+        past_input_embeds: torch.Tensor,      # kept for signature compatibility (not used)
+        past_input_str: str,                  # kept for signature compatibility (not used)
+        past_key_values: "Cache",
+        generate_cfg: dict,
+        ending_token: str,
+    ):
+        """
+        Continue decoding from `past_key_values` until `ending_token`
+        or `max_new_tokens` is reached.
 
-    def cot_commit_inference(self, past_input_embeds: torch.Tensor, past_input_str: str, generate_cfg: dict, ending_token='<COMMIT>'):
-        commit_token_id = self.llm_tokenizer(ending_token, return_tensors="pt").input_ids[0, 0]
+        Returns
+        -------
+        update_str        : str              – fresh text (including <COMMIT>)
+        update_embeddings : torch.Tensor     – (1, T, hidden_size)
+        past_key_values   : "Cache"          – cache after decoding
+        """
 
-        curr_output = self.llm_backbone.generate(inputs_embeds=past_input_embeds, return_dict_in_generate=True, eos_token_id=commit_token_id, **generate_cfg)
+        tokenizer  = self.llm_tokenizer
+        model      = self.llm_backbone
+        device     = past_key_values[0][0].device
+        hidden_sz  = model.config.hidden_size
 
-        new_generated_ids = curr_output.sequences[0]
-        new_generated_str = self.llm_tokenizer.decode(new_generated_ids, skip_special_tokens=False)
-        new_generated_embeds = self.llm_backbone.get_input_embeddings()(new_generated_ids)
+        # ------------------------------------------------------------------ #
+        # decoding hyper-params (mirrors HF `generate()` defaults)
+        do_sample        = generate_cfg.get("do_sample", False)
+        temperature      = generate_cfg.get("temperature", 1.0)
+        top_p            = generate_cfg.get("top_p", 1.0)
+        max_new_tokens   = generate_cfg.get("max_new_tokens", 64)
+        repetition_penalty = generate_cfg.get("repetition_penalty", None)
+        # ------------------------------------------------------------------ #
 
-        update_str = new_generated_str
-        update_embeddings = new_generated_embeds[None, :]
+        commit_id   = tokenizer(ending_token,
+                                add_special_tokens=False,
+                                return_tensors="pt").input_ids.to(device).item()
+        if ending_token == "<EOT>":
+            begin_token = '<BOT>'
+        elif ending_token == "<EOA>":
+            begin_token = '<BOA>'
+        # `starter_ids` is a single dummy token so the first forward pass works.
+        starter_id  = tokenizer(begin_token, add_special_tokens=False, return_tensors="pt").input_ids.to(device).item()
+        next_input_ids = torch.tensor([[starter_id]], device=device)
 
-        return update_str, update_embeddings
+        generated_ids = []                       # list[int]
+
+        with torch.no_grad():
+            for _ in range(max_new_tokens):
+                out = model(
+                    input_ids       = next_input_ids,
+                    past_key_values = past_key_values,
+                    use_cache       = True,
+                )
+                logits           = out.logits[:, -1, :]           # (1, vocab)
+                past_key_values  = out.past_key_values
+
+                # ---------- sampling / greedy ---------- #
+                if repetition_penalty is not None and generated_ids:
+                    logits[:, generated_ids] /= repetition_penalty
+
+                if do_sample:
+                    if temperature != 1.0:
+                        logits /= temperature
+                    probs = F.softmax(logits, dim=-1)
+
+                    if top_p < 1.0:
+                        probs_sorted, idx = torch.sort(probs, dim=-1, descending=True)
+                        cumulative = torch.cumsum(probs_sorted, dim=-1)
+                        mask = cumulative > top_p
+                        probs_sorted[mask] = 0.0
+                        probs = torch.zeros_like(probs).scatter_(1, idx, probs_sorted)
+                        probs = probs / probs.sum(dim=-1, keepdim=True)
+
+                    next_input_ids = torch.multinomial(probs, num_samples=1)
+                else:  # greedy
+                    next_input_ids = torch.argmax(logits, dim=-1, keepdim=True)
+                # ---------------------------------------- #
+
+                token_id = next_input_ids.item()
+                generated_ids.append(token_id)
+
+                if token_id == commit_id:
+                    break
+
+            # ------------------------------------------------------------------ #
+            # tensor-ise the new ids (1, T)   T == len(generated_ids)
+            if generated_ids:
+                new_id_tensor = torch.tensor(generated_ids,
+                                            device=device).unsqueeze(0)
+                new_embeds    = model.get_input_embeddings()(new_id_tensor)
+                new_text      = tokenizer.decode(new_id_tensor[0],
+                                                skip_special_tokens=False)
+            else:  # edge case: commit emitted immediately
+                new_embeds = torch.empty(1, 0, hidden_sz, device=device)
+                new_text   = ""
+
+        new_text = begin_token + new_text
+
+        return new_text, new_embeds, past_key_values

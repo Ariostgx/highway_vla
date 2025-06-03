@@ -13,13 +13,15 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import wandb
 from datetime import datetime
+import numpy as np
 
 # Add the project root to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from src.environments.highway_env.dataset import HighwayCollisionDataset, collate_fn_collision
+from src.environments.highway_env.dataset import HighwayCollisionDataset, collate_fn_collision, HighwayEnvInitStateDataset, collate_fn_env_init_state
 from src.models.vlas.cont_obs_token_action_cot_unified_token_collision import ContObsTokenActionCOTVLAUnifiedTokenCollision
 from src.auto_labeling.highway_env.lane_change import LaneChangeTaskSpecCollision
+from src.inference.highway_env.rollout import rollout_one_episode
 
 torch.set_float32_matmul_precision('high')
 
@@ -70,6 +72,81 @@ class VLAUnifiedModel(nn.Module):
 
     def forward(self, batch):
         return self.vla(batch)
+
+def rollout_evaluation(model, rollout_dataloader, rank, world_size, step, max_rewind_step):
+    """
+    Perform rollout evaluation in a distributed setting
+    """
+    model.eval()
+    
+    score_names = ['exact_match_score', 'subset_coverage', 'rollout_collision', 'model_failed', 
+                   'action_count', 'token_count', 'collision_detect_recall', 'rewind_precision', 
+                   'rewind_collision_avoid_rate', 'model_rewind_ratio', 'reached_goal', 'exceeded_length']
+
+    # collect scores for model and env
+    wm_modes = ['model', 'env']
+    all_mode_scores = {mode: {k: [] for k in score_names} for mode in wm_modes}
+    
+    if rank == 0:
+        progress_bar = tqdm(rollout_dataloader, desc=f"Rollout Evaluation")
+    
+    with torch.no_grad():
+        for env_state_cache, path_info in rollout_dataloader:
+            for mode in wm_modes:
+                # only support batch-size 1 rollout for now
+                scores = rollout_one_episode(
+                    model.module.vla if hasattr(model, 'module') else model.vla, 
+                    env_state_cache[0], 
+                    path_info[0], 
+                    use_wm=True, 
+                    wm_mode=mode, 
+                    cot_mode='pred', 
+                    max_rewind_step=max_rewind_step
+                )
+                for k, v in scores.items():
+                    if v is not None:
+                        all_mode_scores[mode][k].append(v)
+            
+            if rank == 0:
+                progress_bar.update(1)
+    
+    if rank == 0:
+        progress_bar.close()
+
+    # Convert scores to tensors and move to the device
+    device = next(model.parameters()).device
+    local_mean_scores = {
+        mode: {
+            k: torch.tensor(np.mean(v), device=device) if len(v) > 0 else torch.tensor(0.0, device=device)
+            for k, v in all_mode_scores[mode].items()
+        }
+        for mode in wm_modes
+    }
+
+    # Gather all scores across devices
+    global_scores = {mode: {k: [] for k in score_names} for mode in wm_modes}
+    for mode in wm_modes:
+        for k in score_names:
+            # Simple all-gather implementation
+            gathered_scores = [torch.zeros_like(local_mean_scores[mode][k]) for _ in range(world_size)]
+            dist.all_gather(gathered_scores, local_mean_scores[mode][k])
+            global_scores[mode][k] = torch.stack(gathered_scores)
+
+    # Log to wandb (only on rank 0)
+    if rank == 0:
+        for mode in wm_modes:
+            for k, v in global_scores[mode].items():
+                wandb.log({f'rollout_{mode}_pred/{k}': torch.mean(v).item()}, step=step)
+        
+        # Print some key metrics
+        print(f"Rollout Evaluation Step {step}:")
+        for mode in wm_modes:
+            collision_rate = torch.mean(global_scores[mode]['rollout_collision']).item()
+            success_rate = torch.mean(global_scores[mode]['reached_goal']).item()
+            print(f"  {mode.upper()} - Collision Rate: {collision_rate:.3f}, Success Rate: {success_rate:.3f}")
+
+    # Return the rollout collision rate for checkpointing
+    return torch.mean(global_scores['env']['rollout_collision']).item()
 
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
@@ -158,43 +235,66 @@ def main(cfg: DictConfig):
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg_dict['T_step'])
 
-    # Setup dataset and dataloader
-    dataset = HighwayCollisionDataset(cfg_dict['data_folder'], overfit=cfg_dict['overfit'])
+    # Setup training dataset and dataloader
+    train_dataset = HighwayCollisionDataset(cfg_dict['data_folder'], overfit=cfg_dict['overfit'])
     
-    # Create distributed sampler
-    sampler = DistributedSampler(
-        dataset,
+    # Create distributed sampler for training
+    train_sampler = DistributedSampler(
+        train_dataset,
         num_replicas=world_size,
         rank=rank,
         shuffle=True
     )
     
-    dataloader = DataLoader(
-        dataset,
-        # batch_size=cfg_dict['batch_size'] // world_size,  # Divide batch size by world size
-        batch_size=cfg_dict['batch_size'],  # Divide batch size by world size
-        sampler=sampler,
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=cfg_dict['batch_size'],
+        sampler=train_sampler,
         shuffle=False,  # Shuffling is handled by the sampler
         collate_fn=collate_fn_collision,
         num_workers=4,
         pin_memory=True
     )
 
+    # Setup rollout evaluation dataset and dataloader
+    rollout_data_path = cfg_dict.get('rollout_data_path', '/storage/Datasets/highway_env/highway_fast_v0_dqn_meta_action_5_lanes/rollouts_env/rollouts_env_states_1k.pkl')
+    rollout_dataset = HighwayEnvInitStateDataset(rollout_data_path)
+    
+    # Create distributed sampler for rollout evaluation
+    rollout_sampler = DistributedSampler(
+        rollout_dataset,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=False  # No need to shuffle for evaluation
+    )
+    
+    rollout_dataloader = DataLoader(
+        rollout_dataset,
+        batch_size=1,  # Rollout only supports batch size 1
+        sampler=rollout_sampler,
+        shuffle=False,
+        collate_fn=collate_fn_env_init_state,
+        num_workers=2,
+        pin_memory=True
+    )
+
     # Training loop
-    total_steps = cfg_dict['num_epochs'] * len(dataloader)
+    total_steps = cfg_dict['num_epochs'] * len(train_dataloader)
     global_step = 0
     
     if rank == 0:
         print(f'Starting training for {total_steps} steps')
+        print(f'Training dataset size: {len(train_dataset)}')
+        print(f'Rollout dataset size: {len(rollout_dataset)}')
     
     for epoch in range(cfg_dict['num_epochs']):
         # Set epoch for sampler
-        sampler.set_epoch(epoch)
+        train_sampler.set_epoch(epoch)
         
         model.train()
         epoch_loss = 0.0
         
-        for batch in tqdm(dataloader, desc=f'Epoch {epoch}', disable=rank != 0):
+        for batch in tqdm(train_dataloader, desc=f'Epoch {epoch}', disable=rank != 0):
             # Forward pass
             model_return = model(batch)
             loss_dict = model_return[0]
@@ -236,7 +336,7 @@ def main(cfg: DictConfig):
         
         # End of epoch
         if rank == 0:
-            avg_epoch_loss = epoch_loss / len(dataloader)
+            avg_epoch_loss = epoch_loss / len(train_dataloader)
             print(f'Epoch {epoch} completed. Average loss: {avg_epoch_loss:.4f}')
             
             # Log epoch metrics to wandb
@@ -244,21 +344,38 @@ def main(cfg: DictConfig):
                 'epoch/avg_loss': avg_epoch_loss,
                 'epoch/epoch': epoch,
             })
+
+        Perform rollout evaluation every 5 epochs
+        if (epoch + 1) % 5 == 0:
+            if rank == 0:
+                print(f'Starting rollout evaluation at epoch {epoch}...')
             
-            # Save checkpoint
-            if (epoch + 1) % 5 == 0:  # Save every 5 epochs
-                checkpoint = {
-                    'epoch': epoch,
-                    'model_state_dict': model.module.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'scheduler_state_dict': scheduler.state_dict(),
-                    'loss': avg_epoch_loss,
-                }
-                checkpoint_path = os.path.join(save_path, f'checkpoint_epoch_{epoch}.pt')
-                torch.save(checkpoint, checkpoint_path)
-                
-                # Log checkpoint to wandb
-                wandb.save(checkpoint_path)
+            rollout_collision_rate = rollout_evaluation(
+                model, 
+                rollout_dataloader, 
+                rank, 
+                world_size, 
+                global_step,
+                cfg_dict['max_rewind_step']
+            )
+            
+            if rank == 0:
+                print(f'Rollout evaluation completed. Collision rate: {rollout_collision_rate:.3f}')
+        
+        # Save checkpoint (only on rank 0)
+        if rank == 0 and (epoch + 1) % 5 == 0:
+            checkpoint = {
+                'epoch': epoch,
+                'model_state_dict': model.module.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'loss': avg_epoch_loss,
+            }
+            checkpoint_path = os.path.join(save_path, f'checkpoint_epoch_{epoch}.pt')
+            torch.save(checkpoint, checkpoint_path)
+            
+            # Log checkpoint to wandb
+            wandb.save(checkpoint_path)
 
     # Cleanup
     if rank == 0:

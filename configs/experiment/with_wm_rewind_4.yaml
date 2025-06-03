@@ -1,0 +1,9 @@
+# @package _global_
+# WithWMRewind4 experiment configuration
+defaults:
+  - with_wm
+
+# Override specific parameters
+max_rewind_step: 4
+action_sample_mode: 'random'
+exp_name: 'with_wm_rewind_4' 

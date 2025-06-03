@@ -1,0 +1,6 @@
+defaults:
+  - experiment: base
+  - _self_
+
+# This can be overridden by experiment configs or command line
+exp_name: 'test' 

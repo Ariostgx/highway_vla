@@ -1,0 +1,8 @@
+# @package _global_
+# WithWMModel experiment configuration
+defaults:
+  - base
+
+# Override specific parameters
+use_wm: true
+exp_name: 'with_wm' 

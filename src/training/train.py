@@ -14,23 +14,25 @@ from tqdm import tqdm
 import logging
 from datetime import datetime
 from accelerate.utils import LoggerType, ProjectConfiguration
+import hydra
+from omegaconf import DictConfig, OmegaConf
 
 sys.path.append('/u/shuhan/projects/vla')
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from src.environments.highway_env.dataset import HighwayCollisionDataset, collate_fn_collision, HighwayEnvInitStateDataset, collate_fn_env_init_state
 from src.models.vlas.cont_obs_token_action_cot_unified_token_collision import ContObsTokenActionCOTVLAUnifiedTokenCollision
 from src.auto_labeling.highway_env.lane_change import LaneChangeTaskSpecCollision
-from src.conf.highway_env.vla import get_config
 from src.inference.highway_env.rollout import rollout_one_episode
 
 
 torch.set_float32_matmul_precision('high')
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# Main function
-def main():
+# Main function with Hydra integration
+@hydra.main(version_base=None, config_path="../../configs", config_name="config")
+def main(cfg: DictConfig) -> None:
     # Step 1: Setup configuration
-    args, loss_weight, cot_cfg = setup_config()
+    args, loss_weight, cot_cfg = setup_config(cfg)
 
     save_root = '/storage/Models/shuhan/vla/cot_unified_collision'
     save_path = os.path.join(save_root, args.exp_name)
@@ -51,14 +53,26 @@ def main():
     total_limit=1)
     mixed_precision = 'fp16' if args.fp16 else 'no'
     accelerator = Accelerator(mixed_precision=mixed_precision, project_config=project_config)
-    accelerator.init_trackers(project_name='vla_exp', config=vars(args))
+    
+    # Convert DictConfig to regular dict for accelerator and wandb logging
+    config_dict = OmegaConf.to_container(cfg, resolve=True)
+    accelerator.init_trackers(project_name='vla_exp', config=config_dict)
+    
+    # Save configs as both YAML and JSON
+    with open(os.path.join(save_path, 'configs.yaml'), 'w') as f:
+        OmegaConf.save(cfg, f)
     with open(os.path.join(save_path, 'configs.json'), 'w') as f:
-        json.dump(vars(args), f)
+        json.dump(config_dict, f, indent=2)
 
     # Step 3: Setup logging
     if accelerator.is_main_process:
         time_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        wandb.init(project='vla_highwayenv', name=f'{args.exp_name}_{time_str}', config=vars(args))
+        # Log the full Hydra config to wandb
+        wandb.init(
+            project='vla_highwayenv', 
+            name=f'{args.exp_name}_{time_str}', 
+            config=config_dict
+        )
 
     # Step 4: Load dataset and dataloader
     train_dataloader, rollout_dataloader = setup_dataset(args)
@@ -109,16 +123,45 @@ def main():
     if accelerator.is_main_process:
         wandb.finish()
 
-# Setup configuration
-def setup_config():
-    args = get_config()
+# Setup configuration with Hydra DictConfig
+def setup_config(cfg: DictConfig):
+    """
+    Setup configuration from Hydra DictConfig.
+    Creates a simple namespace object for backward compatibility.
+    """
+    # Create a simple namespace object with attributes for backward compatibility
+    class ConfigNamespace:
+        def __init__(self, config_dict):
+            for key, value in config_dict.items():
+                setattr(self, key, value)
+    
+    # Convert to regular dict and create namespace
+    config_dict = OmegaConf.to_container(cfg, resolve=True)
+    args = ConfigNamespace(config_dict)
 
-    loss_weight = {"action": args.action_weight, "obs": 0.0, 'reconst': args.reconst_weight, "cot": args.cot_weight, "separator": args.separator_weight, "rollout_stop": args.rollout_stop_weight, "wm": args.wm_weight}
+    loss_weight = {
+        "action": args.action_weight, 
+        "obs": 0.0, 
+        'reconst': args.reconst_weight, 
+        "cot": args.cot_weight, 
+        "separator": args.separator_weight, 
+        "rollout_stop": args.rollout_stop_weight, 
+        "wm": args.wm_weight
+    }
 
-    cot_cfg = {'lanes_count': 5, 'max_hop': 4, 'cot_index_mode': 'both', 'action_sample_mode': args.action_sample_mode, 'safe_reflect_rate': args.safe_reflect_rate, 'collide_reflect_rate': args.collide_reflect_rate, 'collide_rewind_rate': args.collide_rewind_rate, 'max_rewind_step': args.max_rewind_step, 'shortest_seq_rate': args.shortest_seq_rate}
+    cot_cfg = {
+        'lanes_count': 5, 
+        'max_hop': 4, 
+        'cot_index_mode': 'both', 
+        'action_sample_mode': args.action_sample_mode, 
+        'safe_reflect_rate': args.safe_reflect_rate, 
+        'collide_reflect_rate': args.collide_reflect_rate, 
+        'collide_rewind_rate': args.collide_rewind_rate, 
+        'max_rewind_step': args.max_rewind_step, 
+        'shortest_seq_rate': args.shortest_seq_rate
+    }
 
     return args, loss_weight, cot_cfg
-    
 
 # Setup logging
 def setup_logging(log_dir):
